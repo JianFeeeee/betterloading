@@ -757,13 +757,6 @@ function buildScript(cfg) {
    * ========================================================== */
 
   var visualTimer=null;
-  function startIdleWave(){
-    if(visualTimer||takenOver) return;
-    visualTimer=setInterval(function(){
-      if(done||takenOver) return;
-      pour(0.008+Math.random()*0.008, 150+Math.random()*140);
-    },520);
-  }
   /* ---- 资源阶段：用标准 Performance API 采信息（清单 / 泛光 / 水位）----
      这不是判定「是否加载完成」，只是把浏览器看得到的资源进度显示出来；
      完成与失败的判定仍留给动态层的官方事件。 */
@@ -800,7 +793,9 @@ function buildScript(cfg) {
       if(!fresh) break;
       if(!seen['flashed:'+nm0]&&nm0.indexOf('/plugins')<0&&nm0.indexOf('/api')<0){
         seen['flashed:'+nm0]=1;
-        pour(0.014,150+Math.random()*90);
+        /* 每个已完成资源 = 一团水；总量按资源数摊分到 ~0.5，
+           所以资源越多涨得越快（这正是最初的因果模型）。 */
+        pour(Math.min(0.5/Math.max(1,expected),0.06),150+Math.random()*90);
         var rid0=pushRow(t('resources')+' · '+shortName(nm0));
         /* 资源已经加载完才会出现在 entries 里，所以立刻标记完成，
            耗时取该条目自己的 duration（不是 push 到现在的时间）。 */
@@ -831,7 +826,7 @@ function buildScript(cfg) {
     if(!root) return false;
     if(root.childNodes.length>0){
       mountFired=true;
-      pour(0.025,180);
+      pour(0.06,180);
       status.textContent=t('uiReady');
       setDetail(null);
       if(mo){ mo.disconnect(); mo=null; }
@@ -849,6 +844,17 @@ function buildScript(cfg) {
   watchRoot();
   var mountTimer=setInterval(function(){ if(watchRoot()) clearInterval(mountTimer); },100);
 
+  /* 静态阶段的美化补水：动态层接管之前，让水面一直有动静。
+     体积刻意很小（每 520ms 一小团），它只负责「看起来在加载」；
+     真实进度由资源事件和动态层的官方事件推进。接管后立刻停掉。 */
+  var takenOver=false;
+  function startIdleWave(){
+    if(visualTimer||takenOver) return;
+    visualTimer=setInterval(function(){
+      if(done||takenOver) return;
+      pour(0.006+Math.random()*0.006, 150+Math.random()*140);
+    },520);
+  }
   pour(0.03,120,0.5);
   startIdleWave();
 
@@ -1016,7 +1022,6 @@ function buildScript(cfg) {
     lightGlow(item);
   }
 
-  var takenOver=false;
   window.__betterloading={
     version:1,
     /* 动态层接管：停掉静态层「按固定节奏假装加载」的定时波浪，

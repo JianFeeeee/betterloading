@@ -97,12 +97,21 @@ if (!CLIENT.includes("function finish(reason)")) {
 }
 {
   const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-  const need = ["function finish(reason)", "window.__betterloading=", "startIdleWave", "if(!done) finish(t('timeout'))"];
+  const need = ["function finish(reason)", "window.__betterloading=", "takeover", "if(!done) finish(t('timeout'))"];
   for (const token of need) {
     if (!src.includes(token)) {
       failed += 1;
       console.error(`✗ index.js: missing "${token}"`);
     }
+  }
+  /* 静态阶段允许定时补水（美化），但必须能被动态层接管停掉。 */
+  if (!src.includes("startIdleWave")) {
+    failed += 1;
+    console.error("✗ index.js: static-phase idle wave missing");
+  }
+  if (!src.includes("if(visualTimer||takenOver) return;")) {
+    failed += 1;
+    console.error("✗ index.js: idle wave does not stop after takeover");
   }
   // 每个被调用的收工入口都必须有定义
   if (src.includes("finish(t('contentReady'))") && !src.includes("function finish(reason)")) {
