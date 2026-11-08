@@ -193,7 +193,10 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
 #__bl_list{margin-top:14px;padding-top:12px;border-top:1px solid var(--bl-edge);
   text-align:left;font-size:11.5px;line-height:1.75;min-height:0}
 .__bl_row{display:flex;align-items:center;gap:7px;opacity:.72;
-  transition:opacity .25s ease;white-space:nowrap;overflow:hidden}
+  transition:opacity .25s ease,transform .25s ease;white-space:nowrap;overflow:hidden;
+  animation:__bl_rowin .26s cubic-bezier(.22,.7,.25,1) both}
+@keyframes __bl_rowin{from{opacity:0;transform:translateY(-4px)}to{opacity:.72;transform:none}}
+.__bl_row:first-child{animation-name:__bl_rowin}
 .__bl_row:first-child{opacity:1}
 .__bl_row.__done{opacity:.4}
 .__bl_dot{flex:0 0 auto;width:6px;height:6px;border-radius:50%;background:#5f9dff;
@@ -207,7 +210,11 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
   min-width:230px;max-width:86vw;box-sizing:border-box;text-align:center;
   padding:20px 30px 17px;border-radius:16px;
   background:var(--bl-glass);border:1px solid var(--bl-edge);box-shadow:var(--bl-shadow);
-  text-shadow:var(--bl-textshadow);transition:opacity .6s ease}
+  text-shadow:var(--bl-textshadow);overflow:hidden;
+  /* 隐式高度变化也做过渡：清单行数变化时框不再瞬间跳大跳小。
+     height 由脚本显式设置（auto 无法参与过渡）。 */
+  transition:opacity .6s ease,height .26s cubic-bezier(.22,.7,.25,1),
+             padding .26s cubic-bezier(.22,.7,.25,1)}
 #__bl_text::before{content:"";position:absolute;inset:1px;border-radius:15px;
   pointer-events:none;background:var(--bl-glow)}
 #__bl_title{font-size:16px;font-weight:600;letter-spacing:.1em;opacity:.95}
@@ -314,8 +321,7 @@ function buildScript(cfg) {
         }
         cv.style.top=m.top+'px';
         cv.style.height=Math.min(220,window.innerHeight)+'px';
-        var st=Math.round(m.level*100);
-        if(st!==lastPct){ lastPct=st; pct.textContent=st+'%'; }
+        targetPct=m.level*100;
       };
       worker.postMessage({
         type:'init', canvas:off, VW:window.innerWidth, VH:window.innerHeight,
@@ -324,7 +330,36 @@ function buildScript(cfg) {
       offscreen=true;
     }catch(e){ worker=null; }
   }
-  var lastPct=-1;
+  /* ===== 百分比与框高的平滑 =====
+     10Hz 的 state 消息直接写 textContent 是硬切；这里用 rAF 把显示值
+     补间到目标值，同时把铭牌 height 显式化以便参与 CSS 过渡。 */
+  var shownPct=0, targetPct=0, pctRaf=0, lastPctTxt='';
+  function tickPct(){
+    if(removed) return;
+    var d=targetPct-shownPct;
+    if(Math.abs(d)>0.02){
+      shownPct+=d*0.16;
+    } else if(shownPct!==targetPct){
+      shownPct=targetPct;
+    }
+    var txt=Math.round(shownPct)+'%';
+    if(txt!==lastPctTxt){ lastPctTxt=txt; pct.textContent=txt; }
+    pctRaf=requestAnimationFrame(tickPct);
+  }
+  pctRaf=requestAnimationFrame(tickPct);
+
+  var textEl=document.getElementById('__bl_text');
+  function syncPlateHeight(){
+    if(!textEl) return;
+    var prev=textEl.offsetHeight;
+    textEl.style.height='auto';
+    var next=textEl.offsetHeight;
+    textEl.style.height=prev+'px';                 /* 从旧高度开始 */
+    if(next===prev) return;
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){ textEl.style.height=next+'px'; });
+    });
+  }
   startWorker();
 
   function pour(vol,fall,pos){
@@ -411,6 +446,7 @@ function buildScript(cfg) {
             '<span class="__bl_ms">'+(r.done?(r.ms+'ms'):'—')+'</span></div>';
     }
     listEl.innerHTML=html;
+    syncPlateHeight();
   }
   function pushRow(name){
     var id=++seq;
@@ -511,6 +547,7 @@ function buildScript(cfg) {
     el.classList.add('__done');
     setTimeout(function(){
       removed=true;
+      cancelAnimationFrame(pctRaf);
       if(worker){ worker.terminate(); worker=null; }
       if(el&&el.parentNode) el.parentNode.removeChild(el);
     },1500);
