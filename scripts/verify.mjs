@@ -273,6 +273,27 @@ for (const { name, cfg } of cases) {
     console.error("✗ index.js: realtime 缺少 backdrop-filter（水面上方不会模糊）");
   }
   /* 唯一模糊层不加遮罩色的话，模糊会「发灰」而不是毛玻璃 */
+  /* 深色必须真的有自己的 tint、玻璃卡与文字色，不能只靠浅色值反色。 */
+  for (const token of [
+    "body[data-ds-dark-theme] #__bl{",
+    "color:#eef2fb",
+    "--bl-glass:linear-gradient(150deg,rgba(38,45,60",
+  ]) {
+    if (!src.includes(token)) {
+      failed += 1;
+      console.error(`✗ index.js: 深色主题缺失 "${token}"`);
+    }
+  }
+  /* 深色磨砂的不透明度要接近亮色，太黑会把内容压成死黑（看不出模糊） */
+  const dark = /tintDark: z\.string\(\)\.default\("rgba\((\d+),(\d+),(\d+),\.(\d+)\)"\)/.exec(src);
+  if (!dark) {
+    failed += 1;
+    console.error("✗ index.js: tintDark 默认值无法解析");
+  } else if (Number(dark[4]) > 58) {
+    failed += 1;
+    console.error(`✗ index.js: tintDark 不透明度 ${dark[4]}% 偏高（深色下会压成死黑）`);
+  }
+
   if (!/#__bl_frost\{[\s\S]{0,400}?background-color:var\(--bl-tint\)/.test(src)) {
     failed += 1;
     console.error("✗ index.js: #__bl_frost 缺少底色（模糊层会发灰）");

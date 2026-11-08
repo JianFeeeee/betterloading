@@ -55,7 +55,7 @@ const fields = z.object({
   tintLight: z.string().default("rgba(250,252,255,.55)"),
 
   /** 深色主题下的磨砂底色。 */
-  tintDark: z.string().default("rgba(14,18,26,.62)"),
+  tintDark: z.string().default("rgba(12,15,22,.52)"),
 
   /** 界面语言：auto 跟随浏览器，zh / en 强制指定。 */
   locale: z.union([z.const("auto"), z.const("zh"), z.const("en")]).default("auto"),
@@ -240,6 +240,8 @@ body[data-ds-dark-theme] #__bl{
   --bl-glow:linear-gradient(160deg,rgba(255,255,255,.10),transparent 42%);
   --bl-textshadow:0 1px 10px rgba(0,0,0,.35);
   --bl-tint:${cfg.tintDark}}
+/* 深色下 62% 的黑会把底下内容压成一片死黑 —— 磨砂应该「看得见形状但读不清」。
+   略降不透明度（默认 .52）并提高饱和，让模糊后的色彩层次保留。 */
 
 /* 加载高亮框颜色（配置项 glowColor 换算成 r,g,b） */
 #__bl{--bl-glow-rgb:${parseRgb(cfg.glowColor)}}
