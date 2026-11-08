@@ -39,7 +39,7 @@ export const Config = z.object({
   mode: MODE.default("realtime"),
 
   /** `realtime` 模式的模糊半径（px）。半径越大越贵。 */
-  blur: z.natural().min(0).max(60).default(10),
+  blur: z.natural().min(0).max(60).default(8),
 
   /** `static` 模式的颗粒强度（0 = 无颗粒，100 = 很重）。 */
   noise: z.natural().min(0).max(100).default(13),
@@ -49,6 +49,12 @@ export const Config = z.object({
 
   /** 深色主题下的磨砂底色。 */
   tintDark: z.string().default("rgba(14,18,26,.62)"),
+
+  /** 加载高亮框的颜色（任意合法 CSS 颜色，#rrggbb 最方便）。 */
+  glowColor: z.string().default("#6EAAFF"),
+
+  /** 同时可存在的加载高亮框数量上限。 */
+  glowMax: z.natural().min(1).max(12).default(6),
 
   /** 单团水的最大体积（占全屏比例）。决定「一次加载」最多推进多少。 */
   maxBlob: z.number().min(0.005).max(0.2).default(0.04),
@@ -65,6 +71,33 @@ export const Config = z.object({
   /** 硬超时（ms）。到点无论如何都移除遮罩，绝不把用户永久挡在外面。 */
   idleTimeoutMs: z.natural().min(2000).max(60000).default(12000),
 });
+
+/**
+ * 把配置里的颜色化成 "r,g,b" 供 CSS 的 rgba(var(--x),alpha) 使用。
+ * 支持 #rgb / #rrggbb / rgb() / rgba()；解析不了就回退到默认蓝。
+ * @param value - 任意合法 CSS 颜色字符串。
+ * @returns "r,g,b"。
+ */
+function parseRgb(value) {
+  const raw = String(value ?? "").trim();
+  let m = /^#([0-9a-f]{3})$/i.exec(raw);
+  if (m) {
+    const h = m[1];
+    return [h[0] + h[0], h[1] + h[1], h[2] + h[2]]
+      .map((x) => parseInt(x, 16))
+      .join(",");
+  }
+  m = /^#([0-9a-f]{6})$/i.exec(raw);
+  if (m) {
+    const h = m[1];
+    return [h.slice(0, 2), h.slice(2, 4), h.slice(4, 6)]
+      .map((x) => parseInt(x, 16))
+      .join(",");
+  }
+  m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(raw);
+  if (m) return `${m[1]},${m[2]},${m[3]}`;
+  return "110,170,255";
+}
 
 /** 转义 JSON 用于内联进 <script>（防止提前闭合标签）。 */
 function js(value) {
@@ -103,22 +136,22 @@ body[data-ds-dark-theme] #__bl{
   --bl-textshadow:0 1px 10px rgba(0,0,0,.35);
   --bl-tint:${cfg.tintDark}}
 
-/* 磨砂层 A（静态模糊区）：矩形，高度 = 窄带顶部。- 不重绘，不裁剪。 */
+/* 加载高亮框颜色（配置项 glowColor 换算成 r,g,b） */
+#__bl{--bl-glow-rgb:${parseRgb(cfg.glowColor)}}
+
+/* 加载高亮框颜色（配置项 glowColor 换算成 r,g,b） */
+#__bl{--bl-glow-rgb:${parseRgb(cfg.glowColor)}}
+
+/* 唯一模糊层：覆盖 [0, 窄带底]，下边界由 clip-path 跟随水面曲线。
+   只用一个 backdrop-filter 元素 —— 两个相邻元素必然出现边缘钳制缝，
+   而 mask+backdrop-filter 在 Chrome 下组合不可靠（渐隐不生效、tint 双重叠加）。 */
 #__bl_frost{position:absolute;left:0;top:0;width:100%;height:0;
   ${frostFilter}
   background-color:var(--bl-tint);
   background-repeat:repeat;background-size:96px 96px;
   transition:opacity .5s ease}
 
-/* 磨砂层 B（重绘区模糊）：只盖住窄带（高 2×BAND），
-   clip-path 每帧按水面曲线更新 —— 所以窄带内的模糊下边界就是水波，
-   不是水平直线。面积只有窄带大小，重合成区域随之变小。 */
-#__bl_frost2{position:absolute;left:0;top:0;width:100%;height:0;
-  ${frostFilter}
-  background-color:var(--bl-tint);
-  background-repeat:repeat;background-size:96px 96px;
-  transition:opacity .5s ease}
-#__bl.__done #__bl_frost2{opacity:0}
+
 
 /* dsh 自带的 boot 屏：类名带 hash、随升级变化，故用结构匹配。
    只隐藏 spinner/wordmark/hint，失败提示必须保持可见。 */
@@ -137,17 +170,18 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
 #__bl.__done #__bl_text{opacity:0 !important;transform:translateX(-50%) translateY(-6px);
   transition:opacity .55s ease,transform .55s ease}
 
-/* 蓝色泛光框：叠在遮罩最上层，用 CSS 过渡“亮一下再熄灭”，
-   不参与 canvas 重绘，成本只在合成层。 */
-#__bl_glow{position:absolute;pointer-events:none;border-radius:14px;
+/* 加载高亮框：每个并发加载各自一个框（JS 池化），
+   颜色由 --bl-glow-rgb 控制（配置项 glowColor 换算而来）。 */
+.bl-glow{position:absolute;pointer-events:none;border-radius:14px;
   opacity:0;transform:scale(.985);
-  background:radial-gradient(ellipse at center,rgba(96,158,255,.20),rgba(96,158,255,.04) 72%,transparent 100%);
-  box-shadow:0 0 0 1.5px rgba(110,170,255,.85),
-             0 0 28px 6px rgba(90,150,255,.45),
-             inset 0 0 30px rgba(96,158,255,.22);
+  background:radial-gradient(ellipse at center,
+    rgba(var(--bl-glow-rgb),.20),rgba(var(--bl-glow-rgb),.04) 72%,transparent 100%);
+  box-shadow:0 0 0 1.5px rgba(var(--bl-glow-rgb),.85),
+             0 0 28px 6px rgba(var(--bl-glow-rgb),.45),
+             inset 0 0 30px rgba(var(--bl-glow-rgb),.22);
   transition:opacity .16s ease-out,transform .16s ease-out}
-#__bl_glow.__lit{opacity:1;transform:scale(1)}
-@media (prefers-reduced-motion:reduce){#__bl_glow{transition:none}}
+.bl-glow.__lit{opacity:1;transform:scale(1)}
+@media (prefers-reduced-motion:reduce){.bl-glow{transition:none}}
 
 /* 铭牌里的加载清单 */
 #__bl_list{margin-top:14px;padding-top:12px;border-top:1px solid var(--bl-edge);
@@ -180,9 +214,8 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
 const HTML = `
 <div id="__bl" role="status" aria-live="polite">
   <div id="__bl_frost"></div>
-  <div id="__bl_frost2"></div>
   <canvas id="__bl_wave"></canvas>
-  <div id="__bl_glow"></div>
+  <div id="__bl_glows"></div>
   <div id="__bl_text">
     <div id="__bl_title">DeepSeek Harness</div>
     <div id="__bl_status">正在连接…</div>
@@ -210,8 +243,7 @@ function buildScript(cfg) {
       detail=document.getElementById('__bl_detail'),
       pct=document.getElementById('__bl_pct'),
       frost=document.getElementById('__bl_frost'),
-      frost2=document.getElementById('__bl_frost2'),
-      glow=document.getElementById('__bl_glow'),
+      glowHost=document.getElementById('__bl_glows'),
       listEl=document.getElementById('__bl_list'),
       cv=document.getElementById('__bl_wave'),
       cx=cv&&cv.getContext('2d',{alpha:true});
@@ -223,7 +255,21 @@ function buildScript(cfg) {
     damping: cfg.damping,
     amplitude: cfg.amplitude,
     idleTimeoutMs: cfg.idleTimeoutMs,
+    tintLight: cfg.tintLight,
+    tintDark: cfg.tintDark,
   })};
+
+  /* 把 rgba()/#rrggbb 颜色转成 {r,g,b,a}，供 canvas 画融合渐变 */
+  function toRGBA(c){
+    c=String(c||'').trim();
+    var m=/^#([0-9a-f]{6})$/i.exec(c);
+    if(m){var h=m[1];return {r:parseInt(h.slice(0,2),16),g:parseInt(h.slice(2,4),16),b:parseInt(h.slice(4,6),16),a:1};}
+    m=/^#([0-9a-f]{3})$/i.exec(c);
+    if(m){var x=m[1];return {r:parseInt(x[0]+x[0],16),g:parseInt(x[1]+x[1],16),b:parseInt(x[2]+x[2],16),a:1};}
+    m=/^rgba?\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)(?:\\s*,\\s*([\\d.]+))?/i.exec(c);
+    if(m) return {r:+m[1],g:+m[2],b:+m[3],a:(m[4]===undefined?1:+m[4])};
+    return {r:250,g:252,b:255,a:.55};
+  }
 
   var mounted=false, done=false, removed=false, apiStarted=0, apiDone=0;
 
@@ -261,10 +307,22 @@ function buildScript(cfg) {
     }catch(e){ return '内容'; }
   }
 
-  /* ===== 蓝色泛光：按端点映射到页面大致区域，亮一下再熄灭 =====
+  /* ===== 加载高亮框池 =====
+     每个并发加载各自一个框：之前复用单个元素会让并发请求互相覆盖位置，
+     看上去永远只有一个框。这里做一个上限 GLOW_MAX 的池，
+     取空闲元素、定位、点亮、到时归还。
      注：不是精确到 DOM 元素（静态资源与 /api 都不带布局信息），
-     而是「这个端点影响的那块区域」——侧栏/主区/模态区/顶栏。 */
-  var glowTimer=0, glowOff=0;
+     而是「这个端点影响的那块区域」——侧栏/主区/模态区。 */
+  var GLOW_MAX=CFG.glowMax||6, glowPool=[], glowBusy=[];
+  (function buildPool(){
+    if(!glowHost) return;
+    for(var i=0;i<GLOW_MAX;i++){
+      var g=document.createElement('div');
+      g.className='bl-glow';
+      glowHost.appendChild(g);
+      glowPool.push(g);
+    }
+  })();
   function regionRect(url){
     var W=window.innerWidth, H=window.innerHeight, p='';
     try{ p=new URL(url,location.href).pathname; }catch(e){}
@@ -276,14 +334,32 @@ function buildScript(cfg) {
       return {x:W*0.22,y:H*0.10,w:W*0.56,h:H*0.82};
     return {x:W*0.22,y:H*0.10,w:W*0.78,h:H*0.82};
   }
+  function lightGlow(item){
+    item.el.classList.add('__lit');
+    clearTimeout(item.t);
+    item.t=setTimeout(function(){
+      item.el.classList.remove('__lit');
+      var at=glowBusy.indexOf(item);
+      if(at>=0) glowBusy.splice(at,1);
+      glowPool.push(item.el);
+    },420);
+  }
   function flashGlow(url){
-    if(!glow||done) return;
-    var r=regionRect(url);
-    glow.style.left=r.x+'px'; glow.style.top=r.y+'px';
-    glow.style.width=r.w+'px'; glow.style.height=r.h+'px';
-    glow.classList.add('__lit');
-    clearTimeout(glowOff);
-    glowOff=setTimeout(function(){ glow.classList.remove("__lit"); },420);
+    if(!glowPool.length&&!glowBusy.length) return;
+    if(done) return;
+    var r=regionRect(url), i;
+    /* 同一区域已经在亮 → 只重新提亮，不叠加 */
+    for(i=0;i<glowBusy.length;i++){
+      var b=glowBusy[i];
+      if(Math.abs(b.x-r.x)<2&&Math.abs(b.y-r.y)<2&&Math.abs(b.w-r.w)<2){ lightGlow(b); return; }
+    }
+    var el=glowPool.shift();
+    if(!el) return;
+    el.style.left=r.x+'px'; el.style.top=r.y+'px';
+    el.style.width=r.w+'px'; el.style.height=r.h+'px';
+    var item={el:el,x:r.x,y:r.y,w:r.w};
+    glowBusy.push(item);
+    lightGlow(item);
   }
 
   /* ===== 铭牌里的加载清单（最多 3 条，只在事件发生时更新 DOM） ===== */
@@ -434,7 +510,7 @@ function buildScript(cfg) {
      中间 [base-band, base+band] → 每帧重绘窄带（float canvas）
      下方 (base+band, VH]  → 完全透明，不画任何东西 */
   var VW=0,VH=0,dpr=1,curLevel=0,prevLevel=0,lastPct=-1,lastLay=-1,curTop=0;
-  var BAND=110;                                  // 以水面线为中心上下的重绘半宽
+  var BAND=110, INTRUDE=0, OVL=56;                                  // 以水面线为中心上下的重绘半宽
   function resize(){
     dpr=Math.min(2,window.devicePixelRatio||1);
     VW=el.clientWidth||window.innerWidth;
@@ -468,9 +544,7 @@ function buildScript(cfg) {
       curTop=top;
       cv.style.top=top+'px';
       cv.style.height=Math.min(BAND*2,VH)+'px';
-      frost.style.height=top+'px';                     // 上方静态模糊区
-      frost2.style.top=top+'px';                        // 窄带模糊区
-      frost2.style.height=Math.min(BAND*2,VH)+'px';
+      frost.style.height=Math.min(VH,top+BAND*2)+'px';
     }
     return top;
   }
@@ -478,11 +552,13 @@ function buildScript(cfg) {
      注意 ys 已经是**画布局部坐标**（draw 内已减 top），这里不再减。 */
   var lastClip=0;
   function updateBandClip(now,ys){
-    if(now-lastClip<33) return; lastClip=now;
-    var d='M 0 0 H '+VW.toFixed(0)+' V '+ys[N-1].toFixed(1);
-    for(var i=N-1;i>=0;i-=3) d+=' L '+(i/(N-1)*VW).toFixed(1)+' '+ys[i].toFixed(1);
-    d+=' L 0 '+ys[0].toFixed(1)+' Z';
-    frost2.style.clipPath="path('"+d+"')";
+    if(now-lastClip<50) return; lastClip=now;   // 20Hz：clip 变化触发整层重模糊
+    /* ys 已是画布局部坐标（相对窄带顶），B 层也定位在窄带顶 → 直接用 */
+    /* ys 是画布局部坐标，frost 从视口 0 起 → 加回 curTop */
+    var d='M 0 0 H '+VW.toFixed(0)+' V '+(ys[N-1]+curTop).toFixed(1);
+    for(var i=N-1;i>=0;i-=3) d+=' L '+(i/(N-1)*VW).toFixed(1)+' '+(ys[i]+curTop).toFixed(1);
+    d+=' L 0 '+(ys[0]+curTop).toFixed(1)+' Z';
+    frost.style.clipPath="path('"+d+"')";
   }
   function draw(base,top){
     if(!cx) return null;
@@ -493,9 +569,7 @@ function buildScript(cfg) {
     var ly=base-top;                               // 水面在画布内的 y
     var ys=new Float32Array(N), i;
     for(i=0;i<N;i++) ys[i]=ly+34*Math.tanh(u[i]*CFG.amplitude*amp/34);
-    /* 1) 窄带上部不再需要假雾：模糊由 frost2 的真实 backdrop-filter 提供，
-          它的下边界跟着水波曲线走。这里只画水面本身。 */
-    /* 2) 水下折射光带 */
+    /* 1) 水下折射光带 */
     var g=cx.createLinearGradient(0,ly,0,Math.min(h,ly+70));
     g.addColorStop(0,dark?'rgba(150,195,255,.14)':'rgba(120,160,225,.12)');
     g.addColorStop(1,'rgba(120,160,225,0)');

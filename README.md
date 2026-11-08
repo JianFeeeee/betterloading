@@ -39,20 +39,24 @@ dsh plugin --profile web remove betterloading
 | Implementation | Sample the page's base colour once + tile a generated noise texture | Real `backdrop-filter: blur()` |
 | Look | Frosted film (grain) | Real glass — you can see blurred shapes behind it |
 | Compositing cost | **No realtime filters** | Blurs only the band |
-| Measured fps | 60 | 60 (same machine, same page) |
+| Measured fps | 60 | ~36 (while the frosted area is nearly full-screen early on) |
 
 In earlier builds `realtime` dropped to 34fps because **a full-screen `backdrop-filter` sat underneath a full-screen canvas repainting every frame**, forcing the compositor to re-blur the whole backdrop each frame. A layered structure fixes it — both modes now measure 60fps:
 
 ```
-above │ static frost (a rectangle; never repainted, never clipped)
-──────┼──────────────────────────────────────────────────────────
-      │ repaint band (centred on the water line, ±110px)
-      │   its frost layer's clip-path follows the wave every frame
-──────┼──────────────────────────────────────────────────────────
-below │ transparent (nothing drawn; the page is fully sharp)
+above + middle │ ONE frost layer whose clip-path follows the wave
+───────────────┼──────────────────────────────────────────────
+below          │ transparent (nothing drawn; the page is sharp)
 ```
 
-So `realtime` (real blur) is the default. Switch to `static` to save more:
+**A single `backdrop-filter` element is deliberate**: two adjacent blurred
+layers each clamp their backdrop sampling at the edge, which always shows up as
+a visible seam; and `mask` + `backdrop-filter` is unreliable in Chrome (the fade
+does not apply, the tint double-stacks). One layer costs more per frame but is
+visually seamless.
+
+Switch to `static` when you want 60fps and can accept a frosted film instead of
+real blur:
 
 ```yaml
 - id: betterloading
