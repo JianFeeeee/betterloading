@@ -232,6 +232,15 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
 .__bl_col i{display:block;height:1.15em;line-height:1.15em;font-style:normal;text-align:center}
 .__bl_sign{display:inline-block;margin-left:.06em}
 
+/* detail 的「资源 n / m」：两个数字也用里程表，标签切换时淡入 */
+#__bl_dnum{display:inline-flex;align-items:flex-start;margin-left:.45em}
+#__bl_dnum[hidden]{display:none}
+.__bl_sep{display:inline-block;margin:0 .28em;opacity:.55}
+#__bl_dl{transition:opacity .24s ease}
+#__bl_dl.__swap{animation:__bl_lbl .28s ease}
+@keyframes __bl_lbl{0%{opacity:.25}100%{opacity:1}}
+#__bl_detail .__bl_d{font-size:inherit;height:1.15em}
+
 /* 内容变化时给铭牌一个轻微弹性，产生「中间帧」而不是硬切 */
 @keyframes __bl_bump{0%{transform:translateX(-50%) scale(1)}
   42%{transform:translateX(-50%) scale(1.018)}100%{transform:translateX(-50%) scale(1)}}
@@ -251,7 +260,7 @@ const HTML = `
     <div id="__bl_title">DeepSeek Harness</div>
     <div id="__bl_status">正在连接…</div>
     <div id="__bl_list"></div>
-    <div id="__bl_meta"><span id="__bl_detail">准备资源</span> &nbsp;·&nbsp; <span id="__bl_pct">0%</span></div>
+    <div id="__bl_meta"><span id="__bl_detail"><span id="__bl_dl">准备资源</span><span id="__bl_dnum"><span id="__bl_dn"></span><span class="__bl_sep">/</span><span id="__bl_dm"></span></span></span> &nbsp;·&nbsp; <span id="__bl_pct">0%</span></div>
   </div>
 </div>
 `;
@@ -352,31 +361,65 @@ function buildScript(cfg) {
      10Hz 的 state 消息直接写 textContent 是硬切；这里用 rAF 把显示值
      补间到目标值，同时把铭牌 height 显式化以便参与 CSS 过渡。 */
   var shownPct=0, targetPct=0, pctRaf=0;
-  /* 里程表：每位一个 0-9 的列，位数变化时重建，否则只滚 translateY */
-  var pctWrap=document.getElementById('__bl_pct'), odoCols=[], odoDigits=-1;
-  function buildOdo(n){
-    if(!pctWrap) return;
-    var str=String(n);
-    pctWrap.innerHTML=''; odoCols=[];
-    for(var i=0;i<str.length;i++){
-      var d=document.createElement('span'); d.className='__bl_d';
-      var col=document.createElement('span'); col.className='__bl_col';
-      for(var k=0;k<10;k++){
-        var it=document.createElement('i'); it.textContent=String(k); col.appendChild(it);
+  /* 里程表工厂：每位一个 0-9 的列，靠 translateY 滚动；位数变化时重建 */
+  function createOdo(host, suffix){
+    var cols=[], digits=-1;
+    function build(str){
+      host.innerHTML=''; cols=[];
+      for(var i=0;i<str.length;i++){
+        var d=document.createElement('span'); d.className='__bl_d';
+        var col=document.createElement('span'); col.className='__bl_col';
+        for(var k=0;k<10;k++){
+          var it=document.createElement('i'); it.textContent=String(k); col.appendChild(it);
+        }
+        d.appendChild(col); host.appendChild(d); cols.push(col);
       }
-      d.appendChild(col); pctWrap.appendChild(d); odoCols.push(col);
+      if(suffix){
+        var sg=document.createElement('span'); sg.className='__bl_sign'; sg.textContent=suffix;
+        host.appendChild(sg);
+      }
+      digits=str.length;
     }
-    var sg=document.createElement('span'); sg.className='__bl_sign'; sg.textContent='%';
-    pctWrap.appendChild(sg);
-    odoDigits=str.length;
+    build('0');
+    return function set(n){
+      var str=String(n);
+      if(str.length!==digits) build(str);
+      for(var i=0;i<str.length&&i<cols.length;i++){
+        cols[i].style.transform='translateY('+(-(+str[i])*1.15)+'em)';
+      }
+    };
   }
-  function paintOdo(n){
-    var str=String(n);
-    if(str.length!==odoDigits) buildOdo(n);
-    for(var i=0;i<str.length&&i<odoCols.length;i++){
-      var d=+str[i];
-      odoCols[i].style.transform='translateY('+(-d*1.15)+'em)';
+  var pctWrap=document.getElementById('__bl_pct');
+  var paintOdo=createOdo(pctWrap,'%');
+
+  /* 「资源 n / m」「请求 n / m」：数字里程表 + 标签淡入 */
+  var dlEl=document.getElementById('__bl_dl'),
+      dnumEl=document.getElementById('__bl_dnum'),
+      dnEl=document.getElementById('__bl_dn'),
+      dmEl=document.getElementById('__bl_dm');
+  var setDn=dnEl?createOdo(dnEl,''):function(){},
+      setDm=dmEl?createOdo(dmEl,''):function(){};
+  var lastLabel='';
+  if(dnumEl) dnumEl.hidden=true;      /* 初始只显示文案，不带数字 */
+  function setDetail(kind,a,b){
+    if(!dlEl) return;
+    if(kind===null||kind===undefined){
+      dnumEl.hidden=true;
+      if(lastLabel!=='等待数据'){ lastLabel='等待数据'; dlEl.textContent='等待数据'; }
+      return;
     }
+    dnumEl.hidden=false;
+    if(lastLabel!==kind){
+      lastLabel=kind; dlEl.textContent=kind;
+      dlEl.classList.remove('__swap'); void dlEl.offsetWidth; dlEl.classList.add('__swap');
+    }
+    setDn(a); setDm(b);
+  }
+  function setDetailText(txt){
+    if(!dlEl) return;
+    dnumEl.hidden=true;
+    lastLabel=txt||'';
+    dlEl.textContent=txt||'';
   }
   var textEl=document.getElementById('__bl_text');
   var bumpTimer=0;
@@ -551,7 +594,7 @@ function buildScript(cfg) {
       pushRow('资源 · '+shortName(list[i]&&list[i].name));
     }
     if(fresh>0) flashGlow('/api/');
-    detail.textContent='资源 '+Math.min(n,expected)+' / '+expected;
+    setDetail('资源',Math.min(n,expected),expected);
     status.textContent=n<expected?'正在下载界面资源…':'资源就绪，正在启动…';
   }
   pour(0.02,120,0.5);
@@ -562,7 +605,7 @@ function buildScript(cfg) {
   function onMount(){
     if(mounted) return; mounted=true;
     pour(0.025,180);
-    status.textContent='界面已就绪，正在载入内容…'; detail.textContent='等待数据';
+    status.textContent='界面已就绪，正在载入内容…'; setDetail(null);
     if(mo) mo.disconnect();
   }
   if(root){
@@ -580,7 +623,7 @@ function buildScript(cfg) {
     apiStarted++;
     var nm=label(url), rid=pushRow(nm+' · '+shortName(url));
     flashGlow(url);
-    status.textContent='正在载入'+nm+'…'; detail.textContent='请求 '+apiDone+' / '+apiStarted;
+    status.textContent='正在载入'+nm+'…'; setDetail('请求',apiDone,apiStarted);
     pour(0.008,110);
     var p;
     try{ p=origFetch.apply(this,arguments); }catch(e){ apiDone++; finishRow(rid); pour(0.012,130); throw e; }
@@ -589,7 +632,7 @@ function buildScript(cfg) {
   };
   var apiTimer=setInterval(function(){
     if(apiStarted>0){
-      detail.textContent='请求 '+apiDone+' / '+apiStarted;
+      setDetail('请求',apiDone,apiStarted);
       if(mounted) status.textContent=apiDone<apiStarted?'内容载入中…':'内容已就绪';
     }
   },180);
@@ -599,7 +642,7 @@ function buildScript(cfg) {
     clearInterval(resTimer); clearInterval(apiTimer);
     if(worker) worker.postMessage({type:'finish'});
     done=true;
-    status.textContent='已就绪'; detail.textContent=reason||'';
+    status.textContent='已就绪'; setDetailText(reason||'');
     el.classList.add('__done');
     setTimeout(function(){
       removed=true;
