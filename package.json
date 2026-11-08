@@ -1,0 +1,57 @@
+{
+  "name": "betterloading",
+  "version": "0.1.0",
+  "description": "Frosted-glass pouring loader for the DeepSeek Harness (dsh) web UI: the water line rises with load progress, the frost recedes with it, and the page fades into clarity. Static-sample or real blur, configurable.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "harness",
+    "loading",
+    "loading-screen",
+    "splash",
+    "skeleton",
+    "frosted-glass",
+    "glassmorphism",
+    "theme",
+    "ui",
+    "web-ui"
+  ],
+  "license": "MIT",
+  "author": "JianFeeeee",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JianFeeeee/betterloading.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JianFeeeee/betterloading/issues"
+  },
+  "homepage": "https://github.com/JianFeeeee/betterloading#readme",
+  "engines": {
+    "node": ">=22.19.0",
+    "dsh": ">=0.2.0-rc.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.0"
+  }
+}

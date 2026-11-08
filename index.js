@@ -1,0 +1,538 @@
+/**
+ * betterloading — DeepSeek Harness (dsh) 的「毛玻璃灌水」加载层。
+ *
+ * 灵感来自一个真实痛点：外网访问慢时，基础 UI 已渲染但会话/工作区内容还在
+ * 路上，页面空着一块。这个插件用一层毛玻璃盖住未完成的部分，水位随加载
+ * 进度上涨，磨砂随水位褪去，内容逐渐清晰。
+ *
+ * 因果模型：每完成一次加载（静态资源 / 应用挂载 / 一个 /api 请求），等于有一团
+ * 看不见的水从上方随机横向位置落下。触水时：
+ *   1) 在落点注入零和冲量 → 波动方程产生向两侧传播、互相干涉的波纹；
+ *   2) 体积用 smoothstep 连续注入 → 水位按「这团有多少」平滑上涨。
+ * 水位 = 已注完的体积 + 正在注入的体积：由加载量驱动，但不会有阶跃。
+ *
+ * 实施方式：只通过 `webserver/index-inject` 注入 HTML/CSS/JS，
+ * 不修改任何 dsh 包文件；`fetch` 只做计数包装、原样返回，不改变业务请求。
+ *
+ * @module betterloading
+ */
+import z from "@deepseek-ai/schemastery";
+
+/** 稳定 Cordis 插件名。 */
+export const name = "betterloading";
+
+/** 需要 webServer 来注册 index 注入行。 */
+export const inject = ["webServer"];
+
+/**
+ * 磨砂层的工作模式。
+ *
+ * - `static`：一次性采样页面主色调 + 生成噪点纹理平铺，**不用任何实时滤镜**。
+ *   合成器不必每帧重算背景模糊，实测与「无覆盖层」同为 60fps。默认值。
+ * - `realtime`：真实 `backdrop-filter` 模糊，画面更接近真玻璃，但全屏模糊
+ *   叠在每帧重绘的 canvas 之上时，浏览器会每帧重新模糊整个背景
+ *   （同一台机器实测 60fps → 34fps）。仅在性能充裕时开启。
+ */
+const MODE = z.union([z.const("static"), z.const("realtime")]);
+
+export const Config = z.object({
+  mode: MODE.default("realtime"),
+
+  /** `realtime` 模式的模糊半径（px）。半径越大越贵。 */
+  blur: z.natural().min(0).max(60).default(10),
+
+  /** `static` 模式的颗粒强度（0 = 无颗粒，100 = 很重）。 */
+  noise: z.natural().min(0).max(100).default(13),
+
+  /** 浅色主题下的磨砂底色。 */
+  tintLight: z.string().default("rgba(250,252,255,.55)"),
+
+  /** 深色主题下的磨砂底色。 */
+  tintDark: z.string().default("rgba(14,18,26,.62)"),
+
+  /** 单团水的最大体积（占全屏比例）。决定「一次加载」最多推进多少。 */
+  maxBlob: z.number().min(0.005).max(0.2).default(0.04),
+
+  /** 波速平方项（c²）。越大波传播越快。 */
+  waveSpeed: z.natural().min(40).max(400).default(200),
+
+  /** 阻尼系数。太大则波传不到边缘，太小会持续震荡。 */
+  damping: z.number().min(0.05).max(3).default(0.35),
+
+  /** 水面振幅（px）。 */
+  amplitude: z.natural().min(6).max(80).default(46),
+
+  /** 硬超时（ms）。到点无论如何都移除遮罩，绝不把用户永久挡在外面。 */
+  idleTimeoutMs: z.natural().min(2000).max(60000).default(12000),
+});
+
+/** 转义 JSON 用于内联进 <script>（防止提前闭合标签）。 */
+function js(value) {
+  return JSON.stringify(value).replaceAll("<", "\\u003c");
+}
+
+/**
+ * 生成注入的样式表。
+ * @param cfg - 已校验的配置。
+ * @returns 一段 CSS 文本。
+ */
+function buildStyle(cfg) {
+  // realtime 模式才带真实滤镜；static 模式用噪点纹理（由脚本生成）表现磨砂。
+  const frostFilter =
+    cfg.mode === "realtime"
+      ? `-webkit-backdrop-filter:blur(${String(cfg.blur)}px) saturate(1.15);` +
+        `backdrop-filter:blur(${String(cfg.blur)}px) saturate(1.15);`
+      : "";
+
+  return `
+#__bl{position:fixed;inset:0;z-index:2147483647;overflow:hidden;
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+  color:#15181f;pointer-events:none;
+  --bl-glass:linear-gradient(150deg,rgba(255,255,255,.86),rgba(255,255,255,.70) 55%,rgba(255,255,255,.80));
+  --bl-edge:rgba(24,30,42,.20);
+  --bl-shadow:0 8px 30px rgba(20,28,45,.20),inset 0 1px 0 rgba(255,255,255,.9),inset 0 -1px 0 rgba(20,28,45,.05);
+  --bl-glow:linear-gradient(160deg,rgba(255,255,255,.55),transparent 42%);
+  --bl-textshadow:0 1px 8px rgba(255,255,255,.5);
+  --bl-tint:${cfg.tintLight}}
+body[data-ds-dark-theme] #__bl{
+  color:#eef2fb;
+  --bl-glass:linear-gradient(150deg,rgba(38,45,60,.88),rgba(28,34,47,.72) 55%,rgba(34,41,55,.82));
+  --bl-edge:rgba(255,255,255,.22);
+  --bl-shadow:0 8px 32px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.22),inset 0 -1px 0 rgba(255,255,255,.06);
+  --bl-glow:linear-gradient(160deg,rgba(255,255,255,.10),transparent 42%);
+  --bl-textshadow:0 1px 10px rgba(0,0,0,.35);
+  --bl-tint:${cfg.tintDark}}
+
+/* 磨砂层 A（静态模糊区）：矩形，高度 = 窄带顶部。- 不重绘，不裁剪。 */
+#__bl_frost{position:absolute;left:0;top:0;width:100%;height:0;
+  ${frostFilter}
+  background-color:var(--bl-tint);
+  background-repeat:repeat;background-size:96px 96px;
+  transition:opacity .5s ease}
+
+/* 磨砂层 B（重绘区模糊）：只盖住窄带（高 2×BAND），
+   clip-path 每帧按水面曲线更新 —— 所以窄带内的模糊下边界就是水波，
+   不是水平直线。面积只有窄带大小，重合成区域随之变小。 */
+#__bl_frost2{position:absolute;left:0;top:0;width:100%;height:0;
+  ${frostFilter}
+  background-color:var(--bl-tint);
+  background-repeat:repeat;background-size:96px 96px;
+  transition:opacity .5s ease}
+#__bl.__done #__bl_frost2{opacity:0}
+
+/* dsh 自带的 boot 屏：类名带 hash、随升级变化，故用结构匹配。
+   只隐藏 spinner/wordmark/hint，失败提示必须保持可见。 */
+div[class*="_boot_"] > div[class*="_card_"] > div[class*="_spinner_"],
+div[class*="_boot_"] > div[class*="_card_"] > div[class*="_wordmark_"],
+div[class*="_boot_"] > div[class*="_card_"] > div[class*="_hint_"]{display:none !important}
+div[class*="_boot_"] > div[class*="_card_"]:not(:has(div[class*="_failed_"])){display:none !important}
+div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !important}
+
+/* 水面画布：高度/位置由脚本设为「以水面线为中心、上下各 band px」的窄带。
+   每帧只重绘这条带，其余区域不参与重绘与重合成。 */
+#__bl_wave{position:absolute;left:0;top:0;width:100%;height:0;pointer-events:none;
+  opacity:1;transition:opacity .45s ease}
+#__bl.__done #__bl_wave{opacity:0}
+#__bl.__done #__bl_frost{opacity:0}
+#__bl.__done #__bl_text{opacity:0 !important;transform:translateX(-50%) translateY(-6px);
+  transition:opacity .55s ease,transform .55s ease}
+
+/* 玻璃铭牌（静态玻璃，不依赖背景滤镜） */
+#__bl_text{position:absolute;left:50%;top:34%;transform:translateX(-50%);
+  min-width:230px;max-width:86vw;box-sizing:border-box;text-align:center;
+  padding:20px 30px 17px;border-radius:16px;
+  background:var(--bl-glass);border:1px solid var(--bl-edge);box-shadow:var(--bl-shadow);
+  text-shadow:var(--bl-textshadow);transition:opacity .6s ease}
+#__bl_text::before{content:"";position:absolute;inset:1px;border-radius:15px;
+  pointer-events:none;background:var(--bl-glow)}
+#__bl_title{font-size:16px;font-weight:600;letter-spacing:.1em;opacity:.95}
+#__bl_status{margin-top:9px;font-size:12.5px;letter-spacing:.04em;opacity:.7;min-height:18px}
+#__bl_meta{margin-top:20px;font-size:11px;letter-spacing:.14em;opacity:.5;
+  font-variant-numeric:tabular-nums}
+`;
+}
+
+const HTML = `
+<div id="__bl" role="status" aria-live="polite">
+  <div id="__bl_frost"></div>
+  <div id="__bl_frost2"></div>
+  <canvas id="__bl_wave"></canvas>
+  <div id="__bl_text">
+    <div id="__bl_title">DeepSeek Harness</div>
+    <div id="__bl_status">正在连接…</div>
+    <div id="__bl_meta"><span id="__bl_detail">准备资源</span> &nbsp;·&nbsp; <span id="__bl_pct">0%</span></div>
+  </div>
+</div>
+`;
+
+/**
+ * 生成注入的启动脚本。
+ *
+ * 脚本在 body 开头的普通 `<script>` 里同步执行，早于 head 中的
+ * `type="module"`（defer 语义），因此能抢在 dsh 发出第一个 `/api` 之前
+ * 装好 fetch 包装与 MutationObserver。
+ *
+ * @param cfg - 已校验的配置。
+ * @returns 一段 JS 文本。
+ */
+function buildScript(cfg) {
+  return `
+(function(){
+  var el=document.getElementById('__bl'); if(!el) return;
+  var status=document.getElementById('__bl_status'),
+      detail=document.getElementById('__bl_detail'),
+      pct=document.getElementById('__bl_pct'),
+      frost=document.getElementById('__bl_frost'),
+      frost2=document.getElementById('__bl_frost2'),
+      cv=document.getElementById('__bl_wave'),
+      cx=cv&&cv.getContext('2d',{alpha:true});
+  var CFG=${js({
+    mode: cfg.mode,
+    noise: cfg.noise,
+    maxBlob: cfg.maxBlob,
+    waveSpeed: cfg.waveSpeed,
+    damping: cfg.damping,
+    amplitude: cfg.amplitude,
+    idleTimeoutMs: cfg.idleTimeoutMs,
+  })};
+
+  var mounted=false, done=false, removed=false, apiStarted=0, apiDone=0;
+
+  function isDark(){ return !!(document.body&&document.body.hasAttribute('data-ds-dark-theme')); }
+
+  /* ===== 磨砂质感：realtime 用真实滤镜(CSS 已设)；static 一次性生成噪点 ===== */
+  if(CFG.mode==='static'&&frost){
+    try{
+      var dark=isDark();
+      var nc=document.createElement('canvas'); nc.width=nc.height=96;
+      var nx=nc.getContext('2d');
+      var im=nx.createImageData(96,96), d=im.data;
+      var a=Math.max(0,Math.min(100,CFG.noise));
+      for(var i=0;i<d.length;i+=4){
+        var v=(Math.random()*255)|0;
+        d[i]=d[i+1]=d[i+2]=v;
+        d[i+3]=(Math.random()*a)|0;
+      }
+      nx.putImageData(im,0,0);
+      frost.style.backgroundImage='url('+nc.toDataURL('image/png')+')';
+    }catch(e){}
+  }
+
+  function label(url){
+    try{
+      var p=new URL(url,location.href).pathname;
+      if(p.indexOf('/api/session')===0) return '正在载入会话';
+      if(p.indexOf('/api/workspace')===0) return '正在载入工作区';
+      if(p.indexOf('/api/settings')===0) return '正在载入设置';
+      if(p.indexOf('/api/job')===0) return '正在载入任务';
+      if(p.indexOf('/api/account')===0) return '正在载入账号';
+      return '正在载入内容';
+    }catch(e){ return '正在载入内容'; }
+  }
+
+  /* ===== 水团：落点随机，体积封顶，超出进队列 ===== */
+  var blobs=[], queue=[], committed=0, settled=0;
+  var MAX_BLOB=CFG.maxBlob;
+
+  function pour(vol,fallMs,pos){
+    if(done) return;
+    vol=Math.max(0,Math.min(vol,MAX_BLOB,0.9999-committed));
+    if(vol<=0.0005) return;
+    var px=(pos===undefined)?(0.18+0.64*Math.random()):pos;
+    if(blobs.length>=8||queue.length>0){
+      if(queue.length<64){ committed+=vol; queue.push({vol:vol,fall:fallMs,pos:px}); }
+      return;
+    }
+    committed+=vol; blobs.push(makeBlob(vol,fallMs,px));
+  }
+  function makeBlob(vol,fallMs,pos){
+    return {t0:performance.now(),
+      fall:fallMs||(170+Math.random()*180),
+      dur:480+Math.random()*420+vol*1200,
+      vol:vol,pos:pos,landed:false};
+  }
+  function drainQueue(){
+    while(queue.length>0&&blobs.length<8){ var x=queue.shift(); blobs.push(makeBlob(x.vol,x.fall,x.pos)); }
+  }
+  function smooth(x){ x=x<0?0:(x>1?1:x); return x*x*(3-2*x); }
+  function levelAt(now){
+    drainQueue();
+    var lv=settled;
+    for(var i=blobs.length-1;i>=0;i--){
+      var b=blobs[i];
+      if(now-b.t0<b.fall) continue;
+      var p=(now-b.t0-b.fall)/b.dur;
+      if(p>=1){ settled+=b.vol; blobs.splice(i,1); continue; }
+      lv+=b.vol*smooth(p);
+    }
+    return Math.max(0,Math.min(1,lv));
+  }
+
+  /* ===== 一维阻尼波动方程 ===== */
+  var N=96, u=new Float32Array(N), v=new Float32Array(N), acc=new Float32Array(N);
+  var C2=CFG.waveSpeed, DAMP=CFG.damping, amp=1.0, simLast=performance.now();
+
+  /* 零和冲量核（墨西哥帽）：中心下压、两侧上抬，权重和为 0。
+     非零和会让每次落水都单向推整条水面，累积后与去均值形成对抗 → 液面抽搐。 */
+  var JW=[];
+  (function(){
+    var s=0,i,d;
+    for(d=-5;d<=5;d++){ var w=Math.exp(-d*d/4.0); JW.push(w); s+=w; }
+    var avg=s/JW.length;
+    for(i=0;i<JW.length;i++) JW[i]=(JW[i]-avg)/0.72;
+  })();
+  function jolt(pos,force){
+    var k=Math.max(5,Math.min(N-6,Math.round(pos*N)));
+    for(var d=-5;d<=5;d++) v[k+d]-=force*JW[d+5];
+  }
+  function activeBlobs(now){
+    var a=0,w=0;
+    for(var i=0;i<blobs.length;i++){
+      var b=blobs[i],t=now-b.t0-b.fall;
+      if(t<0||t>b.dur) continue;
+      a++; if(b.vol>w) w=b.vol;
+    }
+    return {count:a,vol:w};
+  }
+  function consumeLanded(now){
+    for(var i=0;i<blobs.length;i++){
+      var b=blobs[i];
+      if(!b.landed&&now-b.t0>=b.fall){ b.landed=true; jolt(b.pos,3.2+b.vol*16.0); }
+    }
+  }
+  /* 位置与速度都要去均值：只清位置会让速度的单向分量持续推水面 → 抽搐 */
+  function removeMean(){
+    var mu=0,mv=0,i;
+    for(i=0;i<N;i++){ mu+=u[i]; mv+=v[i]; }
+    mu/=N; mv/=N;
+    if(Math.abs(mu)>1e-6) for(i=0;i<N;i++) u[i]-=mu;
+    if(Math.abs(mv)>1e-6) for(i=0;i<N;i++) v[i]-=mv*0.55;
+  }
+  var nextStir=0;
+  function step(now){
+    var dt=Math.min(0.033,(now-simLast)/1000); simLast=now;
+    consumeLanded(now);
+    var act=activeBlobs(now);
+    if(!done&&act.count>0&&now>=nextStir){
+      nextStir=now+70+Math.random()*150;
+      var pos=0.15+0.70*Math.random();
+      var f=(Math.random()<0.5?1:-1)*(0.9+act.vol*5.5);
+      jolt(pos,f);
+    }
+    if(done) amp*=Math.pow(0.955,dt*60);
+    var h=1/60, steps=Math.min(2,Math.max(1,Math.round(dt/h)));
+    for(var s=0;s<steps;s++){
+      for(var i=1;i<N-1;i++) acc[i]=C2*(u[i-1]+u[i+1]-2*u[i])-DAMP*v[i];
+      acc[0]=C2*(u[1]-u[0])-DAMP*v[0];
+      acc[N-1]=C2*(u[N-2]-u[N-1])-DAMP*v[N-1];
+      for(var j=0;j<N;j++){ v[j]+=acc[j]*h; u[j]+=v[j]*h; }
+    }
+    removeMean();
+  }
+
+  /* ===== 分层绘制 =====
+     上方 [0, base-band)  → 静态模糊区（frost），矩形裁剪，不重绘
+     中间 [base-band, base+band] → 每帧重绘窄带（float canvas）
+     下方 (base+band, VH]  → 完全透明，不画任何东西 */
+  var VW=0,VH=0,dpr=1,curLevel=0,prevLevel=0,lastPct=-1,lastLay=-1,curTop=0;
+  var BAND=110;                                  // 以水面线为中心上下的重绘半宽
+  function resize(){
+    dpr=Math.min(2,window.devicePixelRatio||1);
+    VW=el.clientWidth||window.innerWidth;
+    VH=el.clientHeight||window.innerHeight;
+    var h=Math.min(BAND*2,VH);
+    if(cv.width!==Math.round(VW*dpr)||cv.height!==Math.round(h*dpr)){
+      cv.width=Math.round(VW*dpr); cv.height=Math.round(h*dpr);
+    }
+  }
+  /* 二次贝塞尔穿过采样点中点：消除折线的「一格一格」感 */
+  function trace(ys,off){
+    cx.beginPath(); cx.moveTo(0,ys[0]+off);
+    for(var i=0;i<N-1;i++){
+      var x0=i/(N-1)*VW, x1=(i+1)/(N-1)*VW;
+      cx.quadraticCurveTo(x0,ys[i]+off,(x0+x1)/2,(ys[i]+ys[i+1])/2+off);
+    }
+    cx.lineTo(VW,ys[N-1]+off);
+  }
+  function baseYFor(lv){
+    var b=VH*(1-lv);
+    var lt=Math.min(1,lv/0.12); lt=lt*lt*(3-2*lt);
+    return b-(1-lt)*26;
+  }
+  /* 摆位：窄带跟随水面，静态模糊区只到窄带顶部。
+     只有整数像素变化超过阈值才写样式，避免每帧 layout。 */
+  function layout(base){
+    var top=Math.round(base-BAND);
+    if(top<0) top=0;
+    if(top>VH-BAND*2) top=Math.max(0,VH-BAND*2);
+    if(Math.abs(top-curTop)>0){
+      curTop=top;
+      cv.style.top=top+'px';
+      cv.style.height=Math.min(BAND*2,VH)+'px';
+      frost.style.height=top+'px';                     // 上方静态模糊区
+      frost2.style.top=top+'px';                        // 窄带模糊区
+      frost2.style.height=Math.min(BAND*2,VH)+'px';
+    }
+    return top;
+  }
+  /* 窄带模糊层的裁剪：下边界就是水波曲线。
+     注意 ys 已经是**画布局部坐标**（draw 内已减 top），这里不再减。 */
+  var lastClip=0;
+  function updateBandClip(now,ys){
+    if(now-lastClip<33) return; lastClip=now;
+    var d='M 0 0 H '+VW.toFixed(0)+' V '+ys[N-1].toFixed(1);
+    for(var i=N-1;i>=0;i-=3) d+=' L '+(i/(N-1)*VW).toFixed(1)+' '+ys[i].toFixed(1);
+    d+=' L 0 '+ys[0].toFixed(1)+' Z';
+    frost2.style.clipPath="path('"+d+"')";
+  }
+  function draw(base,top){
+    if(!cx) return null;
+    var dark=isDark();
+    var h=Math.min(BAND*2,VH);
+    cx.setTransform(dpr,0,0,dpr,0,0);
+    cx.clearRect(0,0,VW,h);
+    var ly=base-top;                               // 水面在画布内的 y
+    var ys=new Float32Array(N), i;
+    for(i=0;i<N;i++) ys[i]=ly+34*Math.tanh(u[i]*CFG.amplitude*amp/34);
+    /* 1) 窄带上部不再需要假雾：模糊由 frost2 的真实 backdrop-filter 提供，
+          它的下边界跟着水波曲线走。这里只画水面本身。 */
+    /* 2) 水下折射光带 */
+    var g=cx.createLinearGradient(0,ly,0,Math.min(h,ly+70));
+    g.addColorStop(0,dark?'rgba(150,195,255,.14)':'rgba(120,160,225,.12)');
+    g.addColorStop(1,'rgba(120,160,225,0)');
+    trace(ys,0); cx.lineTo(VW,Math.min(h,ly+70)); cx.lineTo(0,Math.min(h,ly+70)); cx.closePath();
+    cx.fillStyle=g; cx.fill();
+    /* 3) 弯月面：暗边在上、亮边在下 */
+    trace(ys,-1.6);
+    cx.strokeStyle=dark?'rgba(0,0,0,.5)':'rgba(60,84,130,.42)'; cx.lineWidth=2; cx.stroke();
+    trace(ys,1.1);
+    cx.strokeStyle=dark?'rgba(205,230,255,.9)':'rgba(255,255,255,.98)'; cx.lineWidth=2; cx.stroke();
+    return ys;
+  }
+
+  var raf=0;
+  function frame(now){
+    if(removed) return;
+    curLevel=levelAt(now);
+    /* 水位单调：blob 在 active/settled 之间转移时不得倒退 */
+    if(curLevel<prevLevel) curLevel=prevLevel; else prevLevel=curLevel;
+    var st=Math.round(curLevel*100);
+    if(st!==lastPct){ lastPct=st; pct.textContent=st+'%'; }
+    step(now);
+    resize();
+    var base=baseYFor(curLevel);
+    var top=layout(base);
+    var ys=draw(base,top);
+    if(ys) updateBandClip(now,ys);
+    raf=requestAnimationFrame(frame);
+  }
+  raf=requestAnimationFrame(frame);
+
+  /* ===== 加载事件 → 落下一团水 ===== */
+  var expected=document.querySelectorAll('script[src],link[rel=stylesheet],link[rel=modulepreload]').length||4;
+  var seen={};
+  function checkResources(){
+    var list=[]; try{ list=performance.getEntriesByType('resource')||[]; }catch(e){}
+    var n=0,fresh=0,i;
+    for(i=0;i<list.length;i++){
+      var e=list[i];
+      if(!(/[.](js|css|svg|woff2?|png|jpg)([?]|$)/.test(e.name)||e.initiatorType==='script'||e.initiatorType==='link')) continue;
+      n++;
+      if(!seen[e.name]){ seen[e.name]=1; fresh++; }
+    }
+    for(i=0;i<fresh&&i<expected;i++) pour(0.018,150+i*40);
+    detail.textContent='资源 '+Math.min(n,expected)+' / '+expected;
+    status.textContent=n<expected?'正在下载界面资源…':'资源就绪，正在启动…';
+  }
+  pour(0.02,120,0.5);
+  var resTimer=setInterval(checkResources,140); checkResources();
+  try{ new PerformanceObserver(function(){ checkResources(); }).observe({type:'resource',buffered:true}); }catch(e){}
+
+  var root=document.getElementById('root'),mo=null;
+  function onMount(){
+    if(mounted) return; mounted=true;
+    pour(0.025,180);
+    status.textContent='界面已就绪，正在载入内容…'; detail.textContent='等待数据';
+    if(mo) mo.disconnect();
+  }
+  if(root){
+    mo=new MutationObserver(function(){ if(root.childNodes.length>0) onMount(); });
+    mo.observe(root,{childList:true,subtree:true});
+    if(root.childNodes.length>0) onMount();
+  }
+
+  var origFetch=window.fetch;
+  window.fetch=function(input,init){
+    var url=(typeof input==='string')?input:(input&&input.url)||'';
+    var tracked=false;
+    try{ tracked=new URL(url,location.href).pathname.indexOf('/api')===0; }catch(e){}
+    if(!tracked) return origFetch.apply(this,arguments);
+    apiStarted++;
+    status.textContent=label(url)+'…'; detail.textContent='请求 '+apiDone+' / '+apiStarted;
+    pour(0.008,110);
+    var p;
+    try{ p=origFetch.apply(this,arguments); }catch(e){ apiDone++; pour(0.012,130); throw e; }
+    return p.then(function(r){ apiDone++; pour(0.012,130); return r; },
+                  function(e){ apiDone++; pour(0.012,130); throw e; });
+  };
+  var apiTimer=setInterval(function(){
+    if(apiStarted>0){
+      detail.textContent='请求 '+apiDone+' / '+apiStarted;
+      if(mounted) status.textContent=apiDone<apiStarted?'内容载入中…':'内容已就绪';
+    }
+  },180);
+
+  function finish(reason){
+    if(done) return;
+    clearInterval(resTimer); clearInterval(apiTimer);
+    var need=0.9999-committed, z=0;
+    while(z<24&&need>0){ pour(Math.min(MAX_BLOB,need),120+z*55); need-=MAX_BLOB; z++; }
+    done=true;
+    status.textContent='已就绪'; detail.textContent=reason||'';
+    el.classList.add('__done');
+    setTimeout(function(){
+      removed=true; cancelAnimationFrame(raf);
+      if(el&&el.parentNode) el.parentNode.removeChild(el);
+    },1500);
+    window.fetch=origFetch;
+  }
+  function contentReady(){
+    var r=document.getElementById('root');
+    if(!r) return false;
+    return (r.innerText||'').length>60 || r.querySelectorAll('button,[role=button],input').length>4;
+  }
+  var steady=0, readySince=0;
+  var guard=setInterval(function(){
+    if(done) return;
+    var ready=mounted&&contentReady();
+    if(ready&&!readySince) readySince=Date.now();
+    var noPending=(apiStarted-apiDone)<=0;
+    if(ready&&noPending&&++steady>=2){ clearInterval(guard); finish('共 '+apiStarted+' 个请求'); return; }
+    if(!noPending) steady=0;
+    if(ready&&readySince&&Date.now()-readySince>1800){ clearInterval(guard); finish('内容已就绪'); return; }
+  },200);
+  setTimeout(function(){ if(!done&&mounted&&apiStarted===0){ clearInterval(guard); finish(''); } },3500);
+  setTimeout(function(){ if(!done){ clearInterval(guard); finish('已超时，直接进入'); } },CFG.idleTimeoutMs);
+})();
+`;
+}
+
+/**
+ * 注册 index 注入行。
+ * @param ctx - Cordis 上下文。
+ * @param config - 已校验的 {@link Config}。
+ */
+export function apply(ctx, config) {
+  const cfg = config ?? {};
+  const style = buildStyle(cfg);
+  const script = buildScript(cfg);
+  ctx.inject(["webServer"], (webCtx) => {
+    return webCtx.on("webserver/index-inject", (table) => {
+      table.push({ kind: "style", text: style });
+      table.push({ kind: "html", placement: "body", html: HTML });
+      table.push({ kind: "script", placement: "body", text: script });
+    });
+  });
+}
+
+export default { name, inject, Config, apply };

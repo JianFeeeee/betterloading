@@ -1,0 +1,19 @@
+# betterloading bundle patch: inserts the loader row into the web plugin roster.
+#
+# Install with the official CLI; it reconciles dsh.profile.bundles for packages
+# that declare `dsh.bundle`, so this insert is registered automatically:
+#
+#   dsh plugin --profile web add betterloading
+#
+# Per-deployment tuning (mode, blur, tint, wave physics) is deliberately NOT
+# baked in here. Override the config in your profile's own patch layer, which is
+# applied after every bundle layer and therefore wins:
+#
+#   - id: betterloading
+#     config:
+#       mode: realtime    # static (default) | realtime
+#       blur: 10
+#
+- insert:
+    - id: betterloading
+      name: "betterloading"
