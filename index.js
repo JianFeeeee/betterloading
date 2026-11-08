@@ -137,6 +137,31 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
 #__bl.__done #__bl_text{opacity:0 !important;transform:translateX(-50%) translateY(-6px);
   transition:opacity .55s ease,transform .55s ease}
 
+/* 蓝色泛光框：叠在遮罩最上层，用 CSS 过渡“亮一下再熄灭”，
+   不参与 canvas 重绘，成本只在合成层。 */
+#__bl_glow{position:absolute;pointer-events:none;border-radius:14px;
+  opacity:0;transform:scale(.985);
+  background:radial-gradient(ellipse at center,rgba(96,158,255,.20),rgba(96,158,255,.04) 72%,transparent 100%);
+  box-shadow:0 0 0 1.5px rgba(110,170,255,.85),
+             0 0 28px 6px rgba(90,150,255,.45),
+             inset 0 0 30px rgba(96,158,255,.22);
+  transition:opacity .16s ease-out,transform .16s ease-out}
+#__bl_glow.__lit{opacity:1;transform:scale(1)}
+@media (prefers-reduced-motion:reduce){#__bl_glow{transition:none}}
+
+/* 铭牌里的加载清单 */
+#__bl_list{margin-top:14px;padding-top:12px;border-top:1px solid var(--bl-edge);
+  text-align:left;font-size:11.5px;line-height:1.75;min-height:0}
+.__bl_row{display:flex;align-items:center;gap:7px;opacity:.72;
+  transition:opacity .25s ease;white-space:nowrap;overflow:hidden}
+.__bl_row:first-child{opacity:1}
+.__bl_row.__done{opacity:.4}
+.__bl_dot{flex:0 0 auto;width:6px;height:6px;border-radius:50%;background:#5f9dff;
+  box-shadow:0 0 6px rgba(95,157,255,.9)}
+.__bl_row.__done .__bl_dot{background:currentColor;opacity:.45;box-shadow:none}
+.__bl_name{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis}
+.__bl_ms{flex:0 0 auto;opacity:.6;font-variant-numeric:tabular-nums}
+
 /* 玻璃铭牌（静态玻璃，不依赖背景滤镜） */
 #__bl_text{position:absolute;left:50%;top:34%;transform:translateX(-50%);
   min-width:230px;max-width:86vw;box-sizing:border-box;text-align:center;
@@ -157,9 +182,11 @@ const HTML = `
   <div id="__bl_frost"></div>
   <div id="__bl_frost2"></div>
   <canvas id="__bl_wave"></canvas>
+  <div id="__bl_glow"></div>
   <div id="__bl_text">
     <div id="__bl_title">DeepSeek Harness</div>
     <div id="__bl_status">正在连接…</div>
+    <div id="__bl_list"></div>
     <div id="__bl_meta"><span id="__bl_detail">准备资源</span> &nbsp;·&nbsp; <span id="__bl_pct">0%</span></div>
   </div>
 </div>
@@ -184,6 +211,8 @@ function buildScript(cfg) {
       pct=document.getElementById('__bl_pct'),
       frost=document.getElementById('__bl_frost'),
       frost2=document.getElementById('__bl_frost2'),
+      glow=document.getElementById('__bl_glow'),
+      listEl=document.getElementById('__bl_list'),
       cv=document.getElementById('__bl_wave'),
       cx=cv&&cv.getContext('2d',{alpha:true});
   var CFG=${js({
@@ -221,13 +250,83 @@ function buildScript(cfg) {
   function label(url){
     try{
       var p=new URL(url,location.href).pathname;
-      if(p.indexOf('/api/session')===0) return '正在载入会话';
-      if(p.indexOf('/api/workspace')===0) return '正在载入工作区';
-      if(p.indexOf('/api/settings')===0) return '正在载入设置';
-      if(p.indexOf('/api/job')===0) return '正在载入任务';
-      if(p.indexOf('/api/account')===0) return '正在载入账号';
-      return '正在载入内容';
-    }catch(e){ return '正在载入内容'; }
+      if(p.indexOf('/api/session')===0) return '会话';
+      if(p.indexOf('/api/workspace')===0) return '工作区';
+      if(p.indexOf('/api/settings')===0) return '设置';
+      if(p.indexOf('/api/job')===0) return '任务';
+      if(p.indexOf('/api/account')===0) return '账号';
+      if(p.indexOf('/api/terminal')===0) return '终端';
+      if(p.indexOf('/api/attachment')===0) return '附件';
+      return '内容';
+    }catch(e){ return '内容'; }
+  }
+
+  /* ===== 蓝色泛光：按端点映射到页面大致区域，亮一下再熄灭 =====
+     注：不是精确到 DOM 元素（静态资源与 /api 都不带布局信息），
+     而是「这个端点影响的那块区域」——侧栏/主区/模态区/顶栏。 */
+  var glowTimer=0, glowOff=0;
+  function regionRect(url){
+    var W=window.innerWidth, H=window.innerHeight, p='';
+    try{ p=new URL(url,location.href).pathname; }catch(e){}
+    if(/^\\/api\\/(session|workspace|attachment)/.test(p))
+      return {x:0,y:H*0.10,w:W*0.22,h:H*0.82};
+    if(/^\\/api\\/(settings|account)/.test(p))
+      return {x:W*0.28,y:H*0.20,w:W*0.44,h:H*0.54};
+    if(/^\\/api\\/(terminal|job)/.test(p))
+      return {x:W*0.22,y:H*0.10,w:W*0.56,h:H*0.82};
+    return {x:W*0.22,y:H*0.10,w:W*0.78,h:H*0.82};
+  }
+  function flashGlow(url){
+    if(!glow||done) return;
+    var r=regionRect(url);
+    glow.style.left=r.x+'px'; glow.style.top=r.y+'px';
+    glow.style.width=r.w+'px'; glow.style.height=r.h+'px';
+    glow.classList.add('__lit');
+    clearTimeout(glowOff);
+    glowOff=setTimeout(function(){ glow.classList.remove("__lit"); },420);
+  }
+
+  /* ===== 铭牌里的加载清单（最多 3 条，只在事件发生时更新 DOM） ===== */
+  var rows=[], seq=0, raf2=0;
+  function shortName(url){
+    var s=String(url||'');
+    try{
+      if(s.indexOf('://')>0) s=new URL(s).pathname;   // 完整 URL 只取 pathname
+    }catch(e){}
+    var q=s.indexOf('?'); if(q>0) s=s.slice(0,q);
+    var seg=s.split('/').filter(function(x){return x;});
+    var n=seg.length?seg[seg.length-1]:s;
+    if(seg.length>1) n=seg[seg.length-2]+'/'+n;       // 保留一段父目录便于区分
+    if(n.length>24) n='…'+n.slice(-23);
+    return n;
+  }
+  function renderList(){
+    if(!listEl) return;
+    var html='';
+    for(var i=0;i<rows.length;i++){
+      var r=rows[i];
+      html+='<div class="__bl_row'+(r.done?' __done':'')+'">'+
+            '<span class="__bl_dot"></span>'+
+            '<span class="__bl_name">'+r.name+'</span>'+
+            '<span class="__bl_ms">'+(r.done?(r.ms+'ms'):'—')+'</span></div>';
+    }
+    listEl.innerHTML=html;
+  }
+  function pushRow(name){
+    var id=++seq;
+    rows.unshift({id:id,name:name,done:false,ms:0,t0:performance.now()});
+    if(rows.length>3) rows=rows.slice(0,3);
+    renderList();
+    return id;
+  }
+  function finishRow(id){
+    for(var i=0;i<rows.length;i++){
+      if(rows[i].id===id){
+        rows[i].done=true;
+        rows[i].ms=Math.max(0,Math.round(performance.now()-rows[i].t0));
+        renderList(); return;
+      }
+    }
   }
 
   /* ===== 水团：落点随机，体积封顶，超出进队列 ===== */
@@ -440,7 +539,11 @@ function buildScript(cfg) {
       n++;
       if(!seen[e.name]){ seen[e.name]=1; fresh++; }
     }
-    for(i=0;i<fresh&&i<expected;i++) pour(0.018,150+i*40);
+    for(i=0;i<fresh&&i<expected;i++){
+      pour(0.018,150+i*40);
+      pushRow('资源 · '+shortName(list[i]&&list[i].name));
+    }
+    if(fresh>0) flashGlow('/api/');            // 资源阶段高亮主区域
     detail.textContent='资源 '+Math.min(n,expected)+' / '+expected;
     status.textContent=n<expected?'正在下载界面资源…':'资源就绪，正在启动…';
   }
@@ -468,12 +571,14 @@ function buildScript(cfg) {
     try{ tracked=new URL(url,location.href).pathname.indexOf('/api')===0; }catch(e){}
     if(!tracked) return origFetch.apply(this,arguments);
     apiStarted++;
-    status.textContent=label(url)+'…'; detail.textContent='请求 '+apiDone+' / '+apiStarted;
+    var nm=label(url), rid=pushRow(nm+' · '+shortName(url));
+    flashGlow(url);
+    status.textContent='正在载入'+nm+'…'; detail.textContent='请求 '+apiDone+' / '+apiStarted;
     pour(0.008,110);
     var p;
-    try{ p=origFetch.apply(this,arguments); }catch(e){ apiDone++; pour(0.012,130); throw e; }
-    return p.then(function(r){ apiDone++; pour(0.012,130); return r; },
-                  function(e){ apiDone++; pour(0.012,130); throw e; });
+    try{ p=origFetch.apply(this,arguments); }catch(e){ apiDone++; finishRow(rid); pour(0.012,130); throw e; }
+    return p.then(function(r){ apiDone++; finishRow(rid); pour(0.012,130); return r; },
+                  function(e){ apiDone++; finishRow(rid); pour(0.012,130); throw e; });
   };
   var apiTimer=setInterval(function(){
     if(apiStarted>0){
