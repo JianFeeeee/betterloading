@@ -271,6 +271,40 @@ for (const { name, cfg } of cases) {
   }
 }
 
+/* 设置页：dsh 的「设置 → 插件」是 tab 容器，插件必须自己注册；
+   只声明 Config schema 不会产生任何 tab。 */
+{
+  for (const token of [
+    "plugins.bundle.config",
+    "configForms.whileServed",
+    "SettingsFormModel",
+    "SettingsValueField",
+    "slots.inject",
+    "slots.register",
+  ]) {
+    if (!CLIENT.includes(token)) {
+      failed += 1;
+      console.error(`✗ client bundle: settings page missing "${token}"`);
+    }
+  }
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  const ci = pkg?.dsh?.client?.inject ?? [];
+  for (const mod of ["@deepseek-ai/dsh-client-locale", "@deepseek-ai/dsh-client-ui-settings"]) {
+    if (!ci.includes(mod)) {
+      failed += 1;
+      console.error(`✗ package.json: dsh.client.inject missing "${mod}"`);
+    }
+  }
+}
+
+/* 设置页的配置必须真的能到静态层：client bundle 里要有 configForms → host.configure 的桥。 */
+{
+  if (!CLIENT.includes("wireConfigForms")) {
+    failed += 1;
+    console.error("✗ client bundle: 没有 configForms → host.configure 的桥，设置页改了不生效");
+  }
+}
+
 /* 失败态必须真的存在：红色样式 + 失败行容器。 */
 for (const token of ["--bl-fail", "__bl_fails", "failedTitle"]) {
   if (!CLIENT.includes(token)) {

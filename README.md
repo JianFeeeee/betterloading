@@ -19,6 +19,29 @@ The most familiar slow-network scene: the shell UI has already rendered, but the
 - **Never touches your business requests**: `fetch` is wrapped for counting only and returns the original promise; no dsh package file is modified.
 - **Never traps you**: removed on content-ready, with a fallback check and a hard timeout.
 
+
+## Settings
+
+The plugin registers its own page in **Settings → Plugins → Better Loading**
+(`plugins.bundle.config`, keyed by the package name — and the same card is
+also listed through `plugins.item`). All 17 options are editable there and
+take effect immediately: `mode`, `blur`, `noise`, `tintLight`, `tintDark`,
+`locale`, `texts`, `icon`, `iconSize`, `glowColor`, `glowMax`, `maxBlob`,
+`waveSpeed`, `damping`, `amplitude`, `idleTimeoutMs`, and the master
+`enabled` switch.
+
+`mode` defaults to `static`. `realtime` uses a true `backdrop-filter` for a
+more glass-like look, but on a full-screen canvas that costs roughly
+60fps → 34fps on the reference machine. Switch to it only if you have
+headroom.
+
+## Package metadata
+
+- Display name: `locale/en.json` / `locale/zh.json` → `meta.title`
+- Description: same files → `meta.description`
+- Icon: `package.json` → `"icon": "./icon.svg"` (relative path; dsh inlines
+  it as a data URL, ≤256 KiB, SVG/PNG/JPEG/WebP)
+
 ## Install
 
 ```bash

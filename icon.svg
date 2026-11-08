@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="betterloading">
+  <defs>
+    <clipPath id="bl-clip"><circle cx="32" cy="32" r="30"/></clipPath>
+    <linearGradient id="bl-water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8CBEFF"/>
+      <stop offset="1" stop-color="#3576DC"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#bl-clip)">
+    <rect x="2" y="2" width="60" height="60" fill="#EAF2FF"/>
+    <rect x="2" y="2" width="60" height="60" fill="none" stroke="#CFE0FB" stroke-width="1.5"/>
+    <path d="M2 40c7 0 7-5.2 14-5.2S23 40 30 40s7-5.2 14-5.2S51 40 58 40v22H2z" fill="url(#bl-water)"/>
+    <path d="M2 40c7 0 7-5.2 14-5.2S23 40 30 40s7-5.2 14-5.2S51 40 58 40" fill="none" stroke="#2C68C6" stroke-width="1.8" stroke-linecap="round" opacity=".45"/>
+  </g>
+  <circle cx="32" cy="22" r="7.4" fill="#fff" stroke="#7DB4FF" stroke-width="2"/>
+  <path d="M32 18.4v4.4l3 1.8" fill="none" stroke="#4B8BE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

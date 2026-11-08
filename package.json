@@ -8,7 +8,9 @@
     ".": "./index.js",
     "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "index.js",
@@ -16,7 +18,9 @@
     "cordis.patch.yml",
     "README.md",
     "README.zh.md",
-    "LICENSE"
+    "LICENSE",
+    "locale",
+    "icon.svg"
   ],
   "keywords": [
     "dsh",
@@ -54,7 +58,10 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "inject": [],
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
       "platform": "web"
     }
   },
@@ -70,5 +77,6 @@
   },
   "scripts": {
     "verify": "node scripts/verify.mjs"
-  }
+  },
+  "icon": "./icon.svg"
 }
