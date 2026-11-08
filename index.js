@@ -758,11 +758,11 @@ function buildScript(cfg) {
 
   var visualTimer=null;
   function startIdleWave(){
-    if(visualTimer) return;
+    if(visualTimer||takenOver) return;
     visualTimer=setInterval(function(){
-      if(done) return;
-      pour(0.010+Math.random()*0.010, 150+Math.random()*140);
-    },430);
+      if(done||takenOver) return;
+      pour(0.008+Math.random()*0.008, 150+Math.random()*140);
+    },520);
   }
   /* ---- 资源阶段：用标准 Performance API 采信息（清单 / 泛光 / 水位）----
      这不是判定「是否加载完成」，只是把浏览器看得到的资源进度显示出来；
@@ -1008,9 +1008,17 @@ function buildScript(cfg) {
     lightGlow(item);
   }
 
+  var takenOver=false;
   window.__betterloading={
     version:1,
-    pour:function(v,f,p){ pour(v,f,p); },
+    /* 动态层接管：停掉静态层「按固定节奏假装加载」的定时波浪，
+       此后水位只由真实事件（会话/资源）推进。 */
+    takeover:function(){
+      if(takenOver) return;
+      takenOver=true;
+      if(visualTimer){ clearInterval(visualTimer); visualTimer=null; }
+    },
+    pour:function(v,f,p){ if(done) return; pour(v,f,p); },
     finish:function(reason){ finish(reason); },
     fail:function(name,reason){ noteFailure(name,reason); },
     status:function(txt){ var st=document.getElementById('__bl_status'); if(st) st.textContent=txt; },
@@ -1204,7 +1212,20 @@ self.onmessage=function(e){
  * @param config - 已校验的 {@link Config}。
  */
 export function apply(ctx, config) {
-  const cfg = config ?? {};
+  /* 用 schema 校验（而不是直接读入），设置页改的值也会被同一套规则检查。 */
+  const cfg = Config(config ?? {});
+
+  /* 设置页：dsh 按插件的 Config schema 自动生成表单
+     （settings.describe() 读取「active plugin schemas and their live values」），
+     这里显式登记一次 auto 策略，不依赖默认行为。 */
+  ctx.inject(["settings"], (settingsCtx) => {
+    try {
+      return settingsCtx.settings.configure({ auto: true });
+    } catch {
+      return undefined; /* 同一实例只能登记一次 */
+    }
+  });
+
   const style = buildStyle(cfg);
   const script = buildScript(cfg);
   ctx.inject(["webServer"], (webCtx) => {
