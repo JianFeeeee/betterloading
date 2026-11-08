@@ -516,7 +516,7 @@ function buildScript(cfg) {
      上方 [0, base-band)  → 静态模糊区（frost），矩形裁剪，不重绘
      中间 [base-band, base+band] → 每帧重绘窄带（float canvas）
      下方 (base+band, VH]  → 完全透明，不画任何东西 */
-  var VW=0,VH=0,dpr=1,curLevel=0,prevLevel=0,lastPct=-1,lastLay=-1,curTop=0;
+  var VW=0,VH=0,dpr=1,curLevel=0,prevLevel=0,lastPct=-1,lastLay=-1,curTop=0,lastDraw=0;
   var BAND=110, INTRUDE=0, OVL=56;                                  // 以水面线为中心上下的重绘半宽
   function resize(){
     dpr=Math.min(2,window.devicePixelRatio||1);
@@ -559,7 +559,7 @@ function buildScript(cfg) {
      注意 ys 已经是**画布局部坐标**（draw 内已减 top），这里不再减。 */
   var lastClip=0;
   function updateBandClip(now,ys){
-    if(now-lastClip<50) return; lastClip=now;   // 20Hz：clip 变化触发整层重模糊
+    if(now-lastClip<100) return; lastClip=now;   // 10Hz：clip 变化触发整层重模糊
     /* ys 已是画布局部坐标（相对窄带顶），B 层也定位在窄带顶 → 直接用 */
     /* ys 是画布局部坐标，frost 从视口 0 起 → 加回 curTop */
     var d='M 0 0 H '+VW.toFixed(0)+' V '+(ys[N-1]+curTop).toFixed(1);
@@ -599,11 +599,16 @@ function buildScript(cfg) {
     var st=Math.round(curLevel*100);
     if(st!==lastPct){ lastPct=st; pct.textContent=st+'%'; }
     step(now);
-    resize();
-    var base=baseYFor(curLevel);
-    var top=layout(base);
-    var ys=draw(base,top);
-    if(ys) updateBandClip(now,ys);
+    /* 加载期 CPU 被 dsh 自身启动占满，水波不需要 60Hz：
+       canvas 30Hz、clip 10Hz，把每帧重绘/重模糊的开销减半以上。 */
+    if(now-lastDraw>=33){
+      lastDraw=now;
+      resize();
+      var base=baseYFor(curLevel);
+      var top=layout(base);
+      var ys=draw(base,top);
+      if(ys) updateBandClip(now,ys);
+    }
     raf=requestAnimationFrame(frame);
   }
   raf=requestAnimationFrame(frame);
