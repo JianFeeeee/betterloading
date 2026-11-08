@@ -923,11 +923,11 @@ function buildScript(cfg) {
    * 都等于「已完成阶段的预算合计」，不再是一堆拍脑袋常量相加。
    * ========================================================== */
   var BUDGET={
-    boot:0.05,      /* 骨架出现 */
-    resources:0.55, /* 静态资源，按 N 均分 */
-    mount:0.10,     /* #root 首次有子节点 */
-    deep:0.25,      /* 动态层事件（会话/API） */
-    tail:0.05       /* 收尾补满 */
+    boot:0.03,      /* 骨架出现 */
+    resources:0.82, /* 静态资源（含 /plugins bundle），渐近推进 */
+    mount:0.05,     /* #root 首次有子节点 */
+    deep:0.08,      /* 动态层事件（会话/API） */
+    tail:0.02       /* 收尾补满 */
   };
   var spent={boot:0,resources:0,mount:0,deep:0,tail:0};
   /* 向某阶段注水：不超过该阶段预算，也不超过全局封顶 */
@@ -942,9 +942,45 @@ function buildScript(cfg) {
     pour(give,140+Math.random()*120);
   }
 
+  /* ============================================================
+   * 在飞心跳：让水面「随加载持续移动」
+   *
+   * 浏览器对 <script type="module"> 这类原生加载**不提供进度事件**，
+   * performance 条目也只在完成时出现。所以弱网下那个十几 MB 的
+   * /plugins bundle 在下载的几十秒里，资源阶段完全没有任何完成事件。
+   *
+   * 只靠「完成才注水」，这段时间水面是静止的 —— 看起来就是不跟随进度。
+   *
+   * 这里补一条受限的心跳：有请求在飞、且 1.2s 内没有新的完成事件时，
+   * 缓慢注入一小团。总量封顶在资源预算的 30%，给真实完成事件留大头，
+   * 所以 bundle 真正落地时仍会明显跳一次。
+   * ========================================================== */
+  var trickleSteps=0;
+  function startTrickle(){
+    setInterval(function(){
+      /* 刻意**不**看 takenOver：动态层接管后，弱网下 API 数据还要很久，
+         那段时间同样需要水面继续走。心跳只动 resources 阶段，
+         动态层动的是 deep 阶段，两者不冲突。 */
+      if(done) return;
+      /* 判据不能用 inflight：<script type="module"> 是浏览器原生加载，
+         根本不经过 fetch/XHR，count 永远是 0（实测心跳因此从未触发）。
+         用 readyState 判断「页面自身还在加载」更准确：
+         module script 未完成时它不会是 complete。 */
+      var loading=typeof document!=='undefined'&&document.readyState!=='complete';
+      if(inflight<=0&&!loading) return;
+      if(typeof navigator!=='undefined'&&navigator.onLine===false) return;  /* 断网不假装在动 */
+      if(Date.now()-lastResourceAt<1200) return;   /* 有真实进展，让位 */
+      /* 不限次数：推进量本身随剩余差距收敛（渐近），所以自然变慢，
+         而不是跑够几拍就彻底停下（那样弱网下水面会长时间冻结）。 */
+      trickleSteps+=1;
+      pay('resources',resourceAdvance(0.03));
+    },1000);
+  }
+
   /* ---- 资源阶段：用标准 Performance API 采信息（清单 / 泛光 / 水位）----
      这不是判定「是否加载完成」，只是把浏览器看得到的资源进度显示出来；
      完成与失败的判定仍留给动态层的官方事件。 */
+  var resSeen=0;
   var expected=(function(){
     var els=document.querySelectorAll('script[src],link[rel=stylesheet],link[rel=modulepreload]');
     var c=0;
@@ -956,6 +992,30 @@ function buildScript(cfg) {
     return c||3;
   })();
   var seen={};
+  /** 当前累计注入的总水位（0..1）。 */
+  function totalSpent(){
+    return spent.boot+spent.resources+spent.mount+spent.deep+spent.tail;
+  }
+
+  /**
+   * 每次「一个加载完成」推进多少水。
+   *
+   * 为什么不用「按预期数量均分」：资源总数事先不可知。弱网下真实资源可能
+   * 有几十个，均分会把预算在前几个就吃完，之后（包括那个十几 MB 的
+   * /plugins bundle）再完成也不会有任何水位变化 —— 实测卡住 16 秒。
+   *
+   * 改成渐近推进：每次推进「剩余差距」的一部分，永远留有余量，
+   * 所以**每一次加载都看得见水位在动**，而且越接近满越慢。
+   *
+   * @param ratio - 推进剩余差距的比例（0..1）。
+   * @returns 换算到 resources 阶段的注入比例。
+   */
+  function resourceAdvance(ratio){
+    var ceiling=0.90;                       /* 资源阶段最多推到 90% */
+    var gap=ceiling-totalSpent();
+    if(gap<0.002) gap=0.002;                /* 仍有微小推进，不至于完全停住 */
+    return (gap*ratio)/BUDGET.resources;
+  }
   /* ============================================================
    * 在飞请求计数（只读，不改请求语义）
    *
@@ -1019,27 +1079,33 @@ function buildScript(cfg) {
     var n=0,fresh=0,i;
     for(i=0;i<list.length;i++){
       var e=list[i], nm=e.name||'';
-      /* 排除两类噪音：
-         - /plugins/??a,b,c 是客户端插件的合并 bundle（十几 MB，一个条目，
-           会把清单占满、让 n/m 立刻到顶）
-         - /api/* 是 RPC，由动态层负责，不算静态资源 */
-      if(nm.indexOf('/plugins')>=0||nm.indexOf('/api')>=0) continue;
-      var looksLikeFile=/[.](js|css|svg|woff2?|png|jpg)([?]|$)/.test(nm);
-      if(!looksLikeFile&&e.initiatorType!=='script'&&e.initiatorType!=='link'&&e.initiatorType!=='css') continue;
+      /* /api/* 是 RPC，由动态层负责，完全不计。 */
+      if(nm.indexOf('/api')>=0) continue;
+
+      /* /plugins/??a,b,c 是客户端插件的合并 bundle（弱网下十几 MB，
+         是耗时最长的单个请求）。它**不计入清单**（一个条目会把列表
+         占满、让 n/m 立刻到顶），但**必须计入水位** —— 否则弱网下
+         bundle 下载的那几十秒里水位一动不动，看起来就是「不跟随进度」。 */
+      var isBundle=nm.indexOf('/plugins')>=0;
+      if(!isBundle){
+        var looksLikeFile=/[.](js|css|svg|woff2?|png|jpg)([?]|$)/.test(nm);
+        if(!looksLikeFile&&e.initiatorType!=='script'&&e.initiatorType!=='link'&&e.initiatorType!=='css') continue;
+      }
       n++;
       if(!seen[nm]){ seen[nm]=1; fresh++; }
-    if(fresh) lastActivityAt=Date.now();
     }
+    if(fresh){ resSeen+=fresh; lastActivityAt=Date.now(); }
     /* 每个新出现的资源都落一团水 + 一个泛光框（后半段的 chunk、字体、
        图片也会走到这里）。框按资源所在区域映射，不再固定成「主区域」。 */
     for(i=0;i<list.length;i++){
       var r0=list[i], nm0=r0&&r0.name||'';
       if(!fresh) break;
-      if(!seen['flashed:'+nm0]&&nm0.indexOf('/plugins')<0&&nm0.indexOf('/api')<0){
+      if(!seen['flashed:'+nm0]&&nm0.indexOf('/api')<0){
         seen['flashed:'+nm0]=1;
-        /* 资源阶段预算 0.55 按「预期资源数」均分：
-           第 k 个资源到位时，资源阶段完成 k/N。 */
-        pay('resources',1/Math.max(1,expected));
+        /* 每个完成的资源都注一团水（含 /plugins bundle）；
+           清单与泛光只对非 bundle 资源做（bundle 一行会把列表占满）。 */
+        pay('resources',resourceAdvance(0.12));
+        if(nm0.indexOf('/plugins')>=0) continue;
         var rid0=pushRow(t('resources')+' · '+shortName(nm0));
         /* 资源已经加载完才会出现在 entries 里，所以立刻标记完成，
            耗时取该条目自己的 duration（不是 push 到现在的时间）。 */
@@ -1101,6 +1167,7 @@ function buildScript(cfg) {
     },520);
   }
   startSmoothSurface();
+  startTrickle();
   pay('boot',0.6);   /* 起始一团，让水面立刻有东西 */
   startIdleWave();
 
@@ -1246,7 +1313,11 @@ function buildScript(cfg) {
     finish(t('timeout'));
   },500);
 
-  window.__blDiag={flashCalls:0,lit:0,peak:0,domGlow:0,resourceGlow:0,inFlight:function(){return inflight;},inFlightPeak:function(){return inflightPeak;}};
+  window.__blDiag={flashCalls:0,lit:0,peak:0,domGlow:0,resourceGlow:0,
+    inFlight:function(){return inflight;},inFlightPeak:function(){return inflightPeak;},
+    level:function(){return (targetPct||0)/100;},
+    spent:function(){return JSON.parse(JSON.stringify(spent));},
+    resources:function(){return {seen:resSeen,expected:expected};}};
 
   /* ---- DOM 元素级泛光 ----
      后半段的元素多是 React 渲染出来的，没有网络资源条目，只能观察 DOM。

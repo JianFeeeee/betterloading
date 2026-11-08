@@ -213,6 +213,57 @@ for (const { name, cfg } of cases) {
   }
 }
 
+/* 水位必须跟随真实加载规模：资源阶段的分母不能写死成开屏那几个 <script>。
+   历史事故：弱网下真实资源几十个，前几个就把 55% 预算吃光，之后加载再没有
+   任何水位变化 —— 观感是「水位不反映进度」。 */
+{
+  const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  if (!src.includes('function resourceAdvance(ratio)')) {
+    failed += 1;
+    console.error('✗ index.js: 资源推进不是渐近模型（会卡住）');
+  }
+  if (!src.includes('var ceiling=0.90;')) {
+    failed += 1;
+    console.error('✗ index.js: 渐近上限缺失');
+  }
+  if (/pay\('resources',1\/Math\.max\(1,expected\)\)/.test(src)) {
+    failed += 1;
+    console.error('✗ index.js: 资源注水退回固定分母');
+  }
+  /* pay 必须是累加，不能覆盖 */
+  if (!/spent\[stage\]\+=give/.test(src)) {
+    failed += 1;
+    console.error('✗ index.js: pay 不是累加');
+  }
+}
+
+/* 弱网下必须持续有水位变化：原生 module 加载没有进度事件，
+   只靠「完成才注水」会出现长时间静止（实测 22s 不动）。 */
+{
+  const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  if (!src.includes('function startTrickle()')) {
+    failed += 1;
+    console.error('✗ index.js: 缺少在飞心跳，弱网下水面会长时间静止');
+  }
+  if (src.includes('trickleUsed>=trickleBudget')) {
+    failed += 1;
+    console.error('✗ index.js: 心跳有次数上限（弱网下会冻结）');
+  }
+  if (!src.includes('function resourceAdvance(ratio)')) {
+    failed += 1;
+    console.error('✗ index.js: 心跳不收敛');
+  }
+  if (!src.includes('if(Date.now()-lastResourceAt<1200) return;')) {
+    failed += 1;
+    console.error('✗ index.js: 心跳没有给真实进展让位');
+  }
+  /* bundle 必须计入水位（但不能出现在清单里） */
+  if (!src.includes("var isBundle=nm.indexOf('/plugins')>=0;")) {
+    failed += 1;
+    console.error('✗ index.js: /plugins bundle 未计入水位');
+  }
+}
+
 /* 收工路径必须完整：曾经把 finish() 删掉却留着调用点，
    结果退出回调抛 ReferenceError、遮罩永不消失。 */
 {

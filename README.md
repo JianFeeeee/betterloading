@@ -197,6 +197,13 @@ Water-level state machine:
 - Depends on dsh's `webserver/index-inject` event and the `#root` structure. A major dsh change may require follow-up.
 - dsh's own boot screen is hidden via a **structural selector** (class contains `_boot_`) because its class names carry build hashes. The failure card is deliberately left visible.
 - "Content ready" is a combination of the official list phases (`sessions` and `workspaces` both `ready`), so it means *data arrived*, not *DOM looks full*.
+- The water level advances on every completed load (each completion adds a blob whose
+  volume is a share of the remaining gap, so the level never parks at a fixed cap and
+  never fully fills before the page is actually ready). While a load is in flight but no
+  completion event has arrived — the normal state of a 6 MB `/plugins` bundle on a slow
+  link, since native `<script type="module">` exposes no progress — a small trickle keeps
+  the surface moving. The trickle is bounded, always yields to real completion events, and
+  stops when the document finishes loading or the browser reports offline.
 - The timeout is an **idle** timeout, not a wall-clock one: a 30 kbps link that keeps making progress is never cut off, while a dead connection is released after `idleTimeoutMs`.
 
 ## License
