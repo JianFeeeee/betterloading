@@ -75,7 +75,7 @@ export const Config = z.object({
   glowMax: z.natural().min(1).max(12).default(6),
 
   /** 单团水的最大体积（占全屏比例）。决定「一次加载」最多推进多少。 */
-  maxBlob: z.number().min(0.005).max(0.2).default(0.04),
+  maxBlob: z.number().min(0.005).max(0.35).default(0.25),
 
   /** 波速平方项（c²）。越大波传播越快。 */
   waveSpeed: z.natural().min(40).max(400).default(200),
@@ -793,9 +793,10 @@ function buildScript(cfg) {
       if(!fresh) break;
       if(!seen['flashed:'+nm0]&&nm0.indexOf('/plugins')<0&&nm0.indexOf('/api')<0){
         seen['flashed:'+nm0]=1;
-        /* 每个已完成资源 = 一团水；总量按资源数摊分到 ~0.5，
-           所以资源越多涨得越快（这正是最初的因果模型）。 */
-        pour(Math.min(0.5/Math.max(1,expected),0.06),150+Math.random()*90);
+        /* 每个已完成资源 = 一团固定体积的水。资源多就涨得快，
+           少就涨得慢 —— 这是最初的因果模型，不做「摊分」。
+           总量由 worker 的 0.9999-committed 封顶，收工时会补满。 */
+        pour(0.11,150+Math.random()*90);
         var rid0=pushRow(t('resources')+' · '+shortName(nm0));
         /* 资源已经加载完才会出现在 entries 里，所以立刻标记完成，
            耗时取该条目自己的 duration（不是 push 到现在的时间）。 */
@@ -812,7 +813,8 @@ function buildScript(cfg) {
         if(--fresh<=0) break;
       }
     }
-    setDetail(t('resources'),Math.min(n,expected),expected);
+    /* 分母跟着 n 增长，避免「资源 5/5」永远卡住看不出还在进 */
+    setDetail(t('resources'),n,Math.max(expected,n));
     status.textContent=n<expected?t('downloading'):t('resourcesReady');
   }
   var resTimer=setInterval(checkResources,140); checkResources();
@@ -826,7 +828,7 @@ function buildScript(cfg) {
     if(!root) return false;
     if(root.childNodes.length>0){
       mountFired=true;
-      pour(0.06,180);
+      pour(0.12,180);
       status.textContent=t('uiReady');
       setDetail(null);
       if(mo){ mo.disconnect(); mo=null; }
@@ -852,7 +854,7 @@ function buildScript(cfg) {
     if(visualTimer||takenOver) return;
     visualTimer=setInterval(function(){
       if(done||takenOver) return;
-      pour(0.006+Math.random()*0.006, 150+Math.random()*140);
+      pour(0.010+Math.random()*0.008, 150+Math.random()*140);
     },520);
   }
   pour(0.03,120,0.5);
@@ -1057,7 +1059,7 @@ const WORKER_SRC = `
 var VW=0,VH=0,dpr=1,dark=false,CFG=null,cx=null,cv=null,ready=false;
 var N=96,u=new Float32Array(N),v=new Float32Array(N),acc=new Float32Array(N);
 var C2=200,DAMP=0.35,amp=1.0,simLast=0,BAND=110;
-var blobs=[],queue=[],committed=0,settled=0,MAX_BLOB=0.04,done=false,finishing=false;
+var blobs=[],queue=[],committed=0,settled=0,MAX_BLOB=0.25,done=false,finishing=false;
 var curLevel=0,prevLevel=0,lastEmit=0,lastFrame=0,nextStir=0;
 var JW=[];
 
@@ -1199,7 +1201,7 @@ self.onmessage=function(e){
   if(m.type==='init'){
     cv=m.canvas; cx=cv.getContext('2d',{alpha:true});
     VW=m.VW; VH=m.VH; dpr=m.dpr; dark=m.dark;
-    CFG=m.cfg; C2=CFG.waveSpeed||200; DAMP=CFG.damping||0.35; MAX_BLOB=CFG.maxBlob||0.04;
+    CFG=m.cfg; C2=CFG.waveSpeed||200; DAMP=CFG.damping||0.35; MAX_BLOB=Math.max(0.05,CFG.maxBlob||0.25);
     cv.width=Math.round(VW*dpr); cv.height=Math.round(Math.min(BAND*2,VH)*dpr);
     ready=true; simLast=now(); prevLevel=0; curLevel=0;
     setTimeout(frame,0);
