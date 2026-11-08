@@ -94,7 +94,7 @@ const fields = z.object({
   amplitude: z.natural().min(6).max(80).default(46),
 
   /** 硬超时（ms）。到点无论如何都移除遮罩，绝不把用户永久挡在外面。 */
-  idleTimeoutMs: z.natural().min(2000).max(60000).default(30000),
+  idleTimeoutMs: z.natural().min(2000).max(180000).default(60000),
 });
 
 /**
@@ -250,7 +250,7 @@ body[data-ds-dark-theme] #__bl{
 /* 唯一模糊层：覆盖 [0, 窄带底]，下边界由 clip-path 跟随水面曲线。
    只用一个 backdrop-filter 元素 —— 两个相邻元素必然出现边缘钳制缝，
    而 mask+backdrop-filter 在 Chrome 下组合不可靠（渐隐不生效、tint 双重叠加）。 */
-#__bl_frost{position:absolute;left:0;top:0;width:100%;height:0;
+#__bl_frost{position:absolute;left:0;top:0;width:100%;height:0;will-change:height;
   ${frostFilter}
   background-color:var(--bl-tint);
   background-repeat:repeat;background-size:96px 96px;
@@ -268,7 +268,7 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
 
 /* 水面画布：高度/位置由脚本设为「以水面线为中心、上下各 band px」的窄带。
    每帧只重绘这条带，其余区域不参与重绘与重合成。 */
-#__bl_wave{position:absolute;left:0;top:0;width:100%;height:0;pointer-events:none;
+#__bl_wave{position:absolute;left:0;top:0;width:100%;height:0;pointer-events:none;will-change:transform;
   opacity:1;transition:opacity .45s ease}
 #__bl.__done #__bl_wave{opacity:0}
 #__bl.__done #__bl_frost{opacity:0}
@@ -563,6 +563,55 @@ function buildScript(cfg) {
     }catch(e){}
   }
 
+  /* ===== 水面 DOM 的平滑环 =====
+   *
+   * worker 以 ~20Hz 回报目标水位，这里用 rAF（~60Hz）指数逼近目标：
+   * 视觉上是连续移动，而不是一格一格跳。旧的主线程 60Hz 版本本来
+   * 就有这层平滑，改到 worker 之后丢了，水面因此「一顿一顿」。
+   *
+   * height 与 clip-path 都走同一条逼近路径；clip-path 只在新值到达时
+   * 更新（它比 height 贵，且水面形状本身由 worker 逐帧算好）。
+   */
+  var frostTargetH=0, frostShownH=0, frostTargetClip='', frostAppliedClip='';
+  var cvTargetTop=0, cvShownTop=0, smoothRaf=0;
+  function smoothSurface(){
+    if(removed){ smoothRaf=0; return; }
+    if(frost){
+      var dh=frostTargetH-frostShownH;
+      if(Math.abs(dh)<0.35){
+        frostShownH=frostTargetH;
+      }else{
+        /* 指数逼近 + 每帧步长上限：目标突变（一次注水）时也不会一步跨十几像素，
+           视觉上是连续移动而不是「跳一下再等」。6px/帧 ≈ 360px/s 封顶。 */
+        var step=dh*0.24;
+        var maxStep=6;
+        if(step>maxStep) step=maxStep;
+        else if(step<-maxStep) step=-maxStep;
+        frostShownH+=step;
+      }
+      if(frostShownH<0) frostShownH=0;
+      frost.style.height=frostShownH.toFixed(1)+'px';
+      if(frostTargetClip&&frostTargetClip!==frostAppliedClip){
+        frostAppliedClip=frostTargetClip;
+        frost.style.clipPath=frostTargetClip;
+      }
+    }
+    if(cv){
+      var dt2=cvTargetTop-cvShownTop;
+      if(Math.abs(dt2)<0.25) cvShownTop=cvTargetTop;
+      else{
+        var s2=dt2*0.3;
+        var m2=6;
+        if(s2>m2) s2=m2; else if(s2<-m2) s2=-m2;
+        cvShownTop+=s2;
+      }
+      cv.style.top=cvShownTop.toFixed(1)+'px';
+      cv.style.height=Math.min(220,window.innerHeight)+'px';
+    }
+    smoothRaf=requestAnimationFrame(smoothSurface);
+  }
+  function startSmoothSurface(){ if(!smoothRaf) smoothRaf=requestAnimationFrame(smoothSurface); }
+
   /* ===== 动画 worker：OffscreenCanvas 交给它，波动与绘制不在主线程 ===== */
   var liveSeen=false;
   function startWorker(){
@@ -582,14 +631,13 @@ function buildScript(cfg) {
         /* worker 画出第一帧 = 真波已经在了：让纯 CSS 假波退场，
            避免「上下两层水面」同时存在。 */
         if(!liveSeen){ liveSeen=true; if(el) el.classList.add('__bl_live'); }
-        /* 主线程只做低频 DOM 写入 */
+        /* worker 只回报目标值（约 20Hz），真正的 DOM 写入交给下面的
+           rAF 插值环 —— 否则水位是每 100ms 跳一格，看起来一顿一顿。 */
         if(frost){
-          var fh=Math.max(0,Math.min(window.innerHeight,Math.ceil(m.top)+Math.min(220,window.innerHeight)));
-          frost.style.height=fh+'px';
-          if(m.clip) frost.style.clipPath="path('"+m.clip+"')";
+          frostTargetH=Math.max(0,Math.min(window.innerHeight,Math.ceil(m.top)+Math.min(220,window.innerHeight)));
+          if(m.clip) frostTargetClip="path('"+m.clip+"')";
         }
-        cv.style.top=m.top+'px';
-        cv.style.height=Math.min(220,window.innerHeight)+'px';
+        cvTargetTop=m.top;
         targetPct=m.level*100;
       };
       worker.postMessage({
@@ -890,6 +938,64 @@ function buildScript(cfg) {
     return c||3;
   })();
   var seen={};
+  /* ============================================================
+   * 在飞请求计数（只读，不改请求语义）
+   *
+   * 为什么必须有它：performance 只在请求**完成时**产生条目，
+   * 所以"800ms 没有新资源完成"在弱网下恰恰等于"请求正躺在路上等响应"。
+   * 旧实现据此判定「加载完了」，弱网下 3~4 秒就把遮罩撤了，露出空壳。
+   *
+   * 这里只包一层计数器：参数、返回值、Promise 链全部原样透传，
+   * 不读也不改任何内容。
+   * ========================================================== */
+  var inflight=0, inflightPeak=0, lastActivityAt=Date.now();
+  function creditInflight(delta){
+    inflight=Math.max(0,inflight+delta);
+    if(inflight>inflightPeak) inflightPeak=inflight;
+    /* 请求发起与收尾都算「有进展」：弱网下这正是页面还活着的证据。 */
+    lastActivityAt=Date.now();
+  }
+  function trackInflight(){
+    try{
+      if(typeof window.fetch==='function'&&!window.fetch.__blTracked){
+        var origFetch=window.fetch;
+        var wrapped=function(){
+          creditInflight(1);
+          var p;
+          try{ p=origFetch.apply(this,arguments); }
+          catch(e){ creditInflight(-1); throw e; }
+          if(p&&typeof p.then==='function'){
+            p.then(function(v){ creditInflight(-1); return v; },
+                   function(e){ creditInflight(-1); throw e; });
+          }else{
+            creditInflight(-1);
+          }
+          return p;
+        };
+        wrapped.__blTracked=true;
+        window.fetch=wrapped;
+      }
+      if(typeof XMLHttpRequest==='function'&&!XMLHttpRequest.prototype.__blTracked){
+        var origSend=XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send=function(){
+          var xhr=this;
+          creditInflight(1);
+          var settled=false;
+          var done=function(){ if(!settled){ settled=true; creditInflight(-1); } };
+          try{
+            xhr.addEventListener('loadend',done);
+            xhr.addEventListener('abort',done);
+            xhr.addEventListener('error',done);
+          }catch(e){}
+          try{ return origSend.apply(this,arguments); }
+          catch(e){ done(); throw e; }
+        };
+        XMLHttpRequest.prototype.__blTracked=true;
+      }
+    }catch(e){}
+  }
+  trackInflight();
+
   function checkResources(){
     var list=[]; try{ list=performance.getEntriesByType('resource')||[]; }catch(e){}
     var n=0,fresh=0,i;
@@ -904,6 +1010,7 @@ function buildScript(cfg) {
       if(!looksLikeFile&&e.initiatorType!=='script'&&e.initiatorType!=='link'&&e.initiatorType!=='css') continue;
       n++;
       if(!seen[nm]){ seen[nm]=1; fresh++; }
+    if(fresh) lastActivityAt=Date.now();
     }
     /* 每个新出现的资源都落一团水 + 一个泛光框（后半段的 chunk、字体、
        图片也会走到这里）。框按资源所在区域映射，不再固定成「主区域」。 */
@@ -975,6 +1082,7 @@ function buildScript(cfg) {
       pay('boot',0.5);
     },520);
   }
+  startSmoothSurface();
   pay('boot',0.6);   /* 起始一团，让水面立刻有东西 */
   startIdleWave();
 
@@ -1035,6 +1143,8 @@ function buildScript(cfg) {
     done=true;
     if(visualTimer){ clearInterval(visualTimer); visualTimer=null; }
     if(resTimer){ clearInterval(resTimer); resTimer=null; }
+    if(typeof idleTimer!=='undefined'&&idleTimer){ clearInterval(idleTimer); idleTimer=null; }
+    if(typeof smoothRaf!=='undefined'&&smoothRaf){ cancelAnimationFrame(smoothRaf); smoothRaf=0; }
     if(worker) worker.postMessage({type:'finish'});
     var st=document.getElementById('__bl_status');
     if(st) st.textContent=t('done');
@@ -1085,8 +1195,12 @@ function buildScript(cfg) {
     var rootEl=document.getElementById('root');
     var painted=!!(rootEl&&rootEl.childNodes.length>0);
     if(painted&&!paintedAt) paintedAt=Date.now();
-    var quiet=Date.now()-lastResourceAt>800;
-    var settled=paintedAt&&Date.now()-paintedAt>3000;
+    /* 静默 = 既没有新资源完成，也没有请求还在飞。 */
+    var quiet=inflight===0&&Date.now()-lastResourceAt>800;
+    /* 壳子挂上后至少稳一段时间再考虑退出；弱网下数据可能还在路上。
+       下限 3s，随 idleTimeoutMs 放大到其 35%（默认 30s ⇒ 10.5s）。 */
+    var settleMs=Math.max(3000,Math.round((CFG.idleTimeoutMs||30000)*0.35));
+    var settled=paintedAt&&Date.now()-paintedAt>settleMs;
     if(painted&&quiet&&settled){
       clearInterval(exitTimer);
       pay('tail',1);
@@ -1094,9 +1208,27 @@ function buildScript(cfg) {
     }
   },250);
 
-  setTimeout(function(){ clearInterval(exitTimer); if(!done){ pay('tail',1); finish(t('timeout')); } },CFG.idleTimeoutMs);
+  /* ============================================================
+   * 硬超时：语义是「**无进展**超时」，不是「总时长超时」。
+   *
+   * 为什么：弱网首屏可能 40s+，如果按总时长计，60s 到点就撤罩，
+   * 用户看到的还是空壳（实测过）。这里改成「连续 idleTimeoutMs 没有任何
+   * 网络活动」才强制退出 —— 慢但在动的页面不砍，真卡死的页面会退出。
+   *
+   * 活动来源：请求发起/收尾、资源完成、动态层推进。
+   * 刻意**不**包含静态补水（startIdleWave 每 520ms 注一次水），
+   * 否则计时器永远被重置、永远不超时。
+   * ========================================================== */
+  var idleTimer=setInterval(function(){
+    if(done){ clearInterval(idleTimer); return; }
+    if(Date.now()-lastActivityAt<CFG.idleTimeoutMs) return;
+    clearInterval(idleTimer);
+    clearInterval(exitTimer);
+    pay('tail',1);
+    finish(t('timeout'));
+  },500);
 
-  window.__blDiag={flashCalls:0,lit:0,peak:0,domGlow:0,resourceGlow:0};
+  window.__blDiag={flashCalls:0,lit:0,peak:0,domGlow:0,resourceGlow:0,inFlight:function(){return inflight;},inFlightPeak:function(){return inflightPeak;}};
 
   /* ---- DOM 元素级泛光 ----
      后半段的元素多是 React 渲染出来的，没有网络资源条目，只能观察 DOM。
@@ -1188,7 +1320,7 @@ function buildScript(cfg) {
       if(bw&&el) el.classList.add('__bl_live');
     },
     /* 动态层按真实事件注水（会话/API），走 deep 阶段预算 */
-    deep:function(fraction){ pay('deep',fraction); },
+    deep:function(fraction){ lastActivityAt=Date.now(); pay('deep',fraction); },
     budget:function(){ return {budget:BUDGET,spent:spent}; },
     pour:function(v,f,p){ if(done) return; pour(v,f,p); },
     finish:function(reason){ finish(reason); },
@@ -1380,7 +1512,7 @@ function frame(){
   trace(ys,1.1);
   cx.strokeStyle=dark?'rgba(205,230,255,.9)':'rgba(255,255,255,.98)'; cx.lineWidth=2; cx.stroke();
   /* 每 100ms 把水位 + 裁剪路径交给主线程（DOM 只能在那边改） */
-  if(t-lastEmit>=100){
+  if(t-lastEmit>=50){
     lastEmit=t;
     var d='M 0 0 H '+VW.toFixed(0)+' V '+(ys[N-1]+top).toFixed(1);
     for(var k=N-1;k>=0;k-=3) d+=' L '+(k/(N-1)*VW).toFixed(1)+' '+(ys[k]+top).toFixed(1);

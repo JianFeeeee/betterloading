@@ -82,9 +82,10 @@ for (const { name, cfg } of cases) {
   const defaults = Object.fromEntries(
     Object.entries(dict).map(([k, f]) => [k, f?.meta?.default]),
   );
-  if (defaults.idleTimeoutMs !== 30000) {
+  /* 弱网要留足余量：30s 实测不够，弱网首屏可能 20s+。 */
+  if (defaults.idleTimeoutMs < 60000) {
     failed += 1;
-    console.error(`✗ ${name}: idleTimeoutMs default drifted (${String(defaults.idleTimeoutMs)})`);
+    console.error(`✗ ${name}: idleTimeoutMs 太短 (${String(defaults.idleTimeoutMs)}ms)`);
   }
   if (!["static", "realtime"].includes(defaults.mode)) {
     failed += 1;
@@ -106,6 +107,94 @@ for (const { name, cfg } of cases) {
     }
   }
   if (failed === 0) console.log(`✓ ${name}`);
+}
+
+/* 弱网防早退：静默必须看在飞请求，而不是只看「没有新资源完成」。
+   历史事故：弱网下请求正躺在路上等响应，被当成「已加载完」，
+   #root 一有壳子 3 秒就把遮罩撤了，用户看到空壳。 */
+{
+  const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  for (const token of [
+    "var inflight=0",
+    "function creditInflight",
+    "function trackInflight",
+    "inflight===0&&Date.now()-lastResourceAt>800",
+    /* 超时必须是「无进展超时」，不是「总时长超时」 */
+    "lastActivityAt=Date.now()",
+    "var idleTimer=setInterval",
+    "Date.now()-lastActivityAt<CFG.idleTimeoutMs",
+  ]) {
+    if (!src.includes(token)) {
+      failed += 1;
+      console.error(`✗ index.js: 弱网防早退缺失 "${token}"`);
+    }
+  }
+  /* 静态补水不能算「进展」，否则超时永不触发。只看函数体内部。 */
+  {
+    const fn = /function startIdleWave\(\)\{[\s\S]*?\n {2}\}/.exec(src);
+    if (!fn) {
+      failed += 1;
+      console.error("✗ index.js: startIdleWave 不见了");
+    } else if (fn[0].includes("lastActivityAt")) {
+      failed += 1;
+      console.error("✗ index.js: 静态补水重置了活动计时器（超时会永不触发）");
+    }
+  }
+  /* 静默判据不能再是纯「资源静默」 */
+  if (/var quiet=Date\.now\(\)-lastResourceAt>800;/.test(src)) {
+    failed += 1;
+    console.error("✗ index.js: 静默判据退回到只看资源静默（弱网会早退）");
+  }
+  /* 默认超时必须够弱网用 */
+  const m = /idleTimeoutMs: z\.natural\(\)\.min\(\d+\)\.max\(\d+\)\.default\((\d+)\)/.exec(src);
+  if (!m || Number(m[1]) < 60000) {
+    failed += 1;
+    console.error(`✗ index.js: idleTimeoutMs 默认值过短 (${m ? m[1] : "?"}ms)`);
+  }
+  /* fetch 包装必须是只读计数：原样透传，不改参数与返回值 */
+  if (!/p=origFetch\.apply\(this,arguments\)/.test(src)) {
+    failed += 1;
+    console.error("✗ index.js: fetch 包装未原样透传");
+  }
+}
+
+/* 水面移动必须平滑：worker 只回报目标值，主线程用 rAF 指数逼近。
+   历史事故：从主线程 60Hz 改到 worker 之后，DOM 写入退化成每 100ms 一次，
+   水位是跳着走的（「一顿一顿」）。 */
+{
+  const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  for (const token of [
+    "var frostTargetH=0, frostShownH=0",
+    "function smoothSurface()",
+    "function startSmoothSurface()",
+    "frostShownH+=step",
+    "var maxStep=6",
+  ]) {
+    if (!src.includes(token)) {
+      failed += 1;
+      console.error(`✗ index.js: 水面平滑缺失 "${token}"`);
+    }
+  }
+  /* 不能再在 worker 回调里直接写 height（那就是跳变本身） */
+  if (/frost\.style\.height=fh\+'px'/.test(src)) {
+    failed += 1;
+    console.error("✗ index.js: worker 回调里直接写 frost.height（绕过了平滑）");
+  }
+  /* 回报频率必须高于 10Hz 的旧值 */
+  const emit = /if\(t-lastEmit>=(\d+)\)/.exec(src);
+  if (!emit || Number(emit[1]) > 50) {
+    failed += 1;
+    console.error(`✗ index.js: worker 回报间隔过大 (${emit ? emit[1] : "?"}ms)`);
+  }
+  /* 平滑环必须在启动时拉起、收工时停掉 */
+  if (!src.includes("startSmoothSurface();")) {
+    failed += 1;
+    console.error("✗ index.js: 平滑环没有启动");
+  }
+  if (!/cancelAnimationFrame\(smoothRaf\)/.test(src)) {
+    failed += 1;
+    console.error("✗ index.js: 收工时没有停掉平滑环");
+  }
 }
 
 /* 收工路径必须完整：曾经把 finish() 删掉却留着调用点，

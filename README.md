@@ -117,7 +117,7 @@ Override in your own profile patch layer (`$DSH_HOME/cordis.patch.yml` or the pr
 | `waveSpeed` | `200` | c² of the wave equation. Higher travels faster |
 | `damping` | `0.35` | Damping. Too high and waves die before reaching the edges; too low and they ring |
 | `amplitude` | `46` | Surface amplitude in px |
-| `idleTimeoutMs` | `30000` | Hard timeout (ms) after which the overlay is removed regardless |
+| `idleTimeoutMs` | `60000` | Idle timeout (ms): removed only after this long with **no network activity** (requests start/finish, resources complete, content advances). A slow-but-moving load is never cut. Range 2000–180000 |
 
 ### Text keys
 
@@ -196,7 +196,8 @@ Water-level state machine:
 - Affects the dsh **web UI** only; server behaviour is unchanged.
 - Depends on dsh's `webserver/index-inject` event and the `#root` structure. A major dsh change may require follow-up.
 - dsh's own boot screen is hidden via a **structural selector** (class contains `_boot_`) because its class names carry build hashes. The failure card is deliberately left visible.
-- "Content ready" is heuristic (text length / interactive-element count inside `#root`). Unusual layouts may finish slightly early or late; the hard timeout guarantees the overlay never traps you.
+- "Content ready" is a combination of the official list phases (`sessions` and `workspaces` both `ready`), so it means *data arrived*, not *DOM looks full*.
+- The timeout is an **idle** timeout, not a wall-clock one: a 30 kbps link that keeps making progress is never cut off, while a dead connection is released after `idleTimeoutMs`.
 
 ## License
 

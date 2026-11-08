@@ -88,7 +88,7 @@ dsh plugin --profile web remove dsh-betterloading
 | `waveSpeed` | `200` | 波速平方项 c²。越大波传得越快 |
 | `damping` | `0.35` | 阻尼。过大波传不到边缘，过小会一直震荡 |
 | `amplitude` | `46` | 水面振幅（px） |
-| `idleTimeoutMs` | `30000` | 硬超时（ms）。到点必定移除遮罩 |
+| `idleTimeoutMs` | `60000` | **无进展**超时（ms）：连续这么久没有任何网络活动（请求发起/收尾、资源完成、内容推进）才移除遮罩。慢但在动的页面不会被砍。范围 2000–180000 |
 
 ### 文案键
 
