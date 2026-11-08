@@ -50,6 +50,24 @@ export const Config = z.object({
   /** 深色主题下的磨砂底色。 */
   tintDark: z.string().default("rgba(14,18,26,.62)"),
 
+  /** 界面语言：auto 跟随浏览器，zh / en 强制指定。 */
+  locale: z.union([z.const("auto"), z.const("zh"), z.const("en")]).default("auto"),
+
+  /**
+   * 覆盖任意文案。键见 README 的文案表；值里的 `{n}` 会替换成数字。
+   * 未提供的键回落到所选语言的内置文案。
+   */
+  texts: z.dict(z.string()).default({}),
+
+  /**
+   * 铭牌图标：`whale`（默认，dsh 自己的鲸鱼）、`none`、一段内联 `<svg>`，
+   * 或一个图片 URL。
+   */
+  icon: z.string().default("whale"),
+
+  /** 图标边长（px）。 */
+  iconSize: z.natural().min(0).max(96).default(30),
+
   /** 加载高亮框的颜色（任意合法 CSS 颜色，#rrggbb 最方便）。 */
   glowColor: z.string().default("#6EAAFF"),
 
@@ -98,6 +116,63 @@ function parseRgb(value) {
   if (m) return `${m[1]},${m[2]},${m[3]}`;
   return "110,170,255";
 }
+
+/** dsh 自己的鲸鱼图标（单路径，currentColor 跟随主题明暗）。 */
+const WHALE_ICON = `<svg viewBox="0 0 50 50" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M48.8354 10.0479C48.3232 9.79199 48.1025 10.2798 47.8032 10.5278C47.7007 10.6079 47.6143 10.7119 47.5273 10.8076C46.7793 11.624 45.9048 12.1597 44.7622 12.0957C43.0923 12 41.666 12.5356 40.4058 13.8398C40.1377 12.2319 39.2476 11.272 37.8926 10.6558C37.1836 10.3359 36.4668 10.0156 35.9702 9.31982C35.6235 8.82373 35.5293 8.27197 35.356 7.72754C35.2456 7.3999 35.1353 7.06396 34.7651 7.00781C34.3633 6.94385 34.2056 7.2876 34.0479 7.57568C33.418 8.75195 33.1733 10.0479 33.1973 11.3599C33.2524 14.312 34.4736 16.6641 36.8999 18.3359C37.1758 18.5278 37.2466 18.7197 37.1597 19C36.9946 19.5757 36.7974 20.1357 36.624 20.7119C36.5137 21.0801 36.3486 21.1597 35.9624 21C34.6309 20.4321 33.481 19.5918 32.4644 18.5757C30.7393 16.8721 29.1792 14.9917 27.2334 13.52C26.7764 13.1758 26.3193 12.856 25.8467 12.5518C23.8618 10.584 26.1069 8.96777 26.627 8.77588C27.1704 8.57568 26.8159 7.8877 25.0591 7.896C23.3022 7.90381 21.6953 8.50391 19.647 9.30371C19.3477 9.42383 19.0322 9.51172 18.7095 9.58398C16.8501 9.22363 14.9199 9.14355 12.9033 9.37598C9.10596 9.80762 6.07275 11.6396 3.84326 14.7681C1.16455 18.5278 0.53418 22.7998 1.30664 27.2559C2.11768 31.9521 4.46582 35.8398 8.07373 38.8799C11.8159 42.0322 16.1255 43.5762 21.041 43.2803C24.0269 43.104 27.3516 42.6963 31.1016 39.4561C32.0469 39.936 33.0396 40.1279 34.686 40.272C35.9546 40.3921 37.1758 40.208 38.1211 40.0078C39.6021 39.688 39.4995 38.2881 38.9639 38.0322C34.623 35.9678 35.5762 36.8081 34.71 36.1279C36.9155 33.4639 40.2402 30.6958 41.54 21.728C41.6426 21.0161 41.5557 20.5679 41.54 19.9917C41.5322 19.6396 41.6108 19.5039 42.0049 19.4639C43.0923 19.3359 44.1479 19.0317 45.1167 18.4878C47.9292 16.9199 49.064 14.3438 49.3315 11.2559C49.3711 10.7837 49.3237 10.2959 48.8354 10.0479ZM24.3262 37.8398C20.1196 34.4639 18.0791 33.3521 17.2358 33.3999C16.4482 33.4482 16.5898 34.3682 16.7632 34.9678C16.9443 35.5601 17.1812 35.9683 17.5117 36.4878C17.7402 36.832 17.8979 37.3442 17.2832 37.728C15.9282 38.584 13.5728 37.4399 13.4624 37.3838C10.7207 35.7358 8.42822 33.5601 6.81348 30.584C5.25342 27.7197 4.34766 24.6479 4.19775 21.3677C4.1582 20.5757 4.38672 20.2959 5.15869 20.1519C6.17529 19.96 7.22314 19.9199 8.23926 20.0718C12.5327 20.7119 16.1885 22.6719 19.2529 25.7759C21.002 27.5439 22.3252 29.6558 23.6885 31.7202C25.1377 33.9121 26.6978 36 28.6831 37.7119C29.3843 38.312 29.9434 38.7681 30.479 39.104C28.8643 39.2881 26.1699 39.3281 24.3262 37.8398ZM26.3433 24.6001C26.3433 24.248 26.6191 23.9678 26.9658 23.9678C27.0444 23.9678 27.1152 23.9839 27.1782 24.0078C27.2651 24.04 27.3438 24.0879 27.4067 24.1602C27.5171 24.272 27.5801 24.4321 27.5801 24.6001C27.5801 24.9521 27.3042 25.2319 26.9575 25.2319C26.6108 25.2319 26.3433 24.9521 26.3433 24.6001ZM32.6064 27.8799C32.2046 28.0479 31.8027 28.1919 31.4165 28.208C30.8179 28.2397 30.1641 27.9922 29.8096 27.688C29.2583 27.2158 28.8643 26.9521 28.6987 26.1279C28.6279 25.7759 28.6675 25.2319 28.7305 24.9199C28.8721 24.248 28.7144 23.8159 28.2495 23.4238C27.8716 23.104 27.3911 23.0161 26.8633 23.0161C26.666 23.0161 26.4849 22.9277 26.3511 22.856C26.1304 22.7441 25.9492 22.4639 26.1226 22.1201C26.1777 22.0078 26.4458 21.7358 26.5088 21.688C27.2256 21.272 28.0527 21.4077 28.8169 21.7197C29.5259 22.0161 30.0615 22.5601 30.834 23.3281C31.6216 24.2559 31.7632 24.5117 32.2124 25.208C32.5669 25.752 32.8901 26.312 33.1104 26.9521C33.2446 27.3521 33.0713 27.6802 32.6064 27.8799Z" fill="currentColor"/></svg>`;
+
+/** 内置文案。键在 README 里公开，用户可用 `texts` 逐条覆盖。 */
+const TEXTS = {
+  zh: {
+    title: "DeepSeek Harness",
+    connecting: "正在连接…",
+    prep: "准备资源",
+    waiting: "等待数据",
+    resources: "资源",
+    requests: "请求",
+    downloading: "正在下载界面资源…",
+    resourcesReady: "资源就绪，正在启动…",
+    uiReady: "界面已就绪，正在载入内容…",
+    loadingTopic: "正在载入{topic}…",
+    contentLoading: "内容载入中…",
+    contentReady: "内容已就绪",
+    done: "已就绪",
+    totalRequests: "共 {n} 个请求",
+    timeout: "已超时，直接进入",
+    tSession: "会话",
+    tWorkspace: "工作区",
+    tSettings: "设置",
+    tJob: "任务",
+    tAccount: "账号",
+    tTerminal: "终端",
+    tAttachment: "附件",
+    tContent: "内容",
+  },
+  en: {
+    title: "DeepSeek Harness",
+    connecting: "Connecting…",
+    prep: "Preparing",
+    waiting: "Waiting for data",
+    resources: "Assets",
+    requests: "Requests",
+    downloading: "Downloading UI assets…",
+    resourcesReady: "Assets ready, starting…",
+    uiReady: "Shell ready, loading content…",
+    loadingTopic: "Loading {topic}…",
+    contentLoading: "Loading content…",
+    contentReady: "Content ready",
+    done: "Ready",
+    totalRequests: "{n} requests",
+    timeout: "Timed out, continuing",
+    tSession: "sessions",
+    tWorkspace: "workspaces",
+    tSettings: "settings",
+    tJob: "jobs",
+    tAccount: "account",
+    tTerminal: "terminal",
+    tAttachment: "attachments",
+    tContent: "content",
+  },
+};
 
 /** 转义 JSON 用于内联进 <script>（防止提前闭合标签）。 */
 function js(value) {
@@ -222,6 +297,11 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
 #__bl_meta{margin-top:20px;font-size:11px;letter-spacing:.14em;opacity:.5;
   font-variant-numeric:tabular-nums;display:flex;align-items:center;justify-content:center;gap:.45em}
 
+/* 铭牌图标：默认 dsh 鲸鱼，currentColor 跟随主题 */
+#__bl_iconwrap{margin:0 auto 13px;display:flex;align-items:center;justify-content:center;
+  opacity:.9}
+#__bl_iconwrap svg,#__bl_iconwrap img{display:block;color:currentColor}
+
 /* 里程表式百分比：每位一列 0-9，靠 translateY 滚动 */
 #__bl_pct{display:inline-flex;align-items:flex-start;line-height:1;
   font-variant-numeric:tabular-nums;font-weight:600;opacity:.9}
@@ -257,10 +337,11 @@ const HTML = `
   <canvas id="__bl_wave"></canvas>
   <div id="__bl_glows"></div>
   <div id="__bl_text">
-    <div id="__bl_title">DeepSeek Harness</div>
+    <div id="__bl_iconwrap"></div>
+    <div id="__bl_title"></div>
     <div id="__bl_status">正在连接…</div>
     <div id="__bl_list"></div>
-    <div id="__bl_meta"><span id="__bl_detail"><span id="__bl_dl">准备资源</span><span id="__bl_dnum"><span id="__bl_dn"></span><span class="__bl_sep">/</span><span id="__bl_dm"></span></span></span> &nbsp;·&nbsp; <span id="__bl_pct">0%</span></div>
+    <div id="__bl_meta"><span id="__bl_detail"><span id="__bl_dl"></span><span id="__bl_dnum"><span id="__bl_dn"></span><span class="__bl_sep">/</span><span id="__bl_dm"></span></span></span> &nbsp;·&nbsp; <span id="__bl_pct">0%</span></div>
   </div>
 </div>
 `;
@@ -306,9 +387,64 @@ function buildScript(cfg) {
     amplitude: cfg.amplitude,
     idleTimeoutMs: cfg.idleTimeoutMs,
     glowMax: cfg.glowMax,
+    iconSize: cfg.iconSize,
   })};
 
+  /* ===== 文案与图标 ===== */
+  var TEXTS_ZH=${js(TEXTS.zh)};
+  var TEXTS_EN=${js(TEXTS.en)};
+  var USER_TEXTS=${js(cfg.texts || {})};
+  var LANG=(function(){
+    var want=${js(cfg.locale || "auto")};
+    if(want==="zh"||want==="en") return want;
+    var nav=(navigator.language||navigator.userLanguage||"en").toLowerCase();
+    return nav.indexOf("zh")===0?"zh":"en";
+  })();
+  var T=(function(){
+    var base=(LANG==="zh")?TEXTS_ZH:TEXTS_EN, out={}, k;
+    for(k in base) out[k]=base[k];
+    for(k in USER_TEXTS) if(USER_TEXTS[k]) out[k]=USER_TEXTS[k];
+    return out;
+  })();
+  function t(key,vars){
+    var s=(T[key]!==undefined?T[key]:key);
+    if(vars) for(var k in vars) s=s.replace("{"+k+"}",vars[k]);
+    return s;
+  }
+
+  /* ===== 图标 ===== */
+  var iconWrap=document.getElementById('__bl_iconwrap');
+  function renderIcon(){
+    if(!iconWrap) return;
+    var raw=${js(cfg.icon || "whale")};
+    var size=Math.max(0,CFG.iconSize||30);
+    if(!size||raw==='none'){ iconWrap.innerHTML=''; iconWrap.style.display='none'; return; }
+    iconWrap.style.display='';
+    var svg=raw;
+    if(raw==='whale') svg=${js(WHALE_ICON)};
+    if(svg.charAt(0)==='<'){
+      iconWrap.innerHTML=svg;
+      var el=iconWrap.firstElementChild;
+      if(el){ el.setAttribute('width',String(size)); el.setAttribute('height',String(size)); }
+    }else{
+      var img=document.createElement('img');
+      img.src=raw; img.width=size; img.height=size; img.alt='';
+      iconWrap.innerHTML=''; iconWrap.appendChild(img);
+    }
+  }
+  renderIcon();
+  /* 初始文案 */
+  (function initTexts(){
+    var ti=document.getElementById('__bl_title');
+    if(ti) ti.textContent=t('title');
+    var st=document.getElementById('__bl_status');
+    if(st) st.textContent=t('connecting');
+    var pr=document.getElementById('__bl_dl');
+    if(pr) pr.textContent=t('prep');
+  })();
+
   var mounted=false, done=false, removed=false, apiStarted=0, apiDone=0;
+
   var worker=null, offscreen=false;
 
   function isDark(){ return !!(document.body&&document.body.hasAttribute('data-ds-dark-theme')); }
@@ -405,7 +541,8 @@ function buildScript(cfg) {
     if(!dlEl) return;
     if(kind===null||kind===undefined){
       dnumEl.hidden=true;
-      if(lastLabel!=='等待数据'){ lastLabel='等待数据'; dlEl.textContent='等待数据'; }
+      var wt=t('waiting');
+      if(lastLabel!==wt){ lastLabel=wt; dlEl.textContent=wt; }
       return;
     }
     dnumEl.hidden=false;
@@ -566,15 +703,15 @@ function buildScript(cfg) {
   function label(url){
     try{
       var p=new URL(url,location.href).pathname;
-      if(p.indexOf('/api/session')===0) return '会话';
-      if(p.indexOf('/api/workspace')===0) return '工作区';
-      if(p.indexOf('/api/settings')===0) return '设置';
-      if(p.indexOf('/api/job')===0) return '任务';
-      if(p.indexOf('/api/account')===0) return '账号';
-      if(p.indexOf('/api/terminal')===0) return '终端';
-      if(p.indexOf('/api/attachment')===0) return '附件';
-      return '内容';
-    }catch(e){ return '内容'; }
+      if(p.indexOf('/api/session')===0) return 'tSession';
+      if(p.indexOf('/api/workspace')===0) return 'tWorkspace';
+      if(p.indexOf('/api/settings')===0) return 'tSettings';
+      if(p.indexOf('/api/job')===0) return 'tJob';
+      if(p.indexOf('/api/account')===0) return 'tAccount';
+      if(p.indexOf('/api/terminal')===0) return 'tTerminal';
+      if(p.indexOf('/api/attachment')===0) return 'tAttachment';
+      return 'tContent';
+    }catch(e){ return 'tContent'; }
   }
 
   /* ===== 加载事件 → 落一团水 ===== */
@@ -591,11 +728,11 @@ function buildScript(cfg) {
     }
     for(i=0;i<fresh&&i<expected;i++){
       pour(0.018,150+i*40);
-      pushRow('资源 · '+shortName(list[i]&&list[i].name));
+      pushRow(t('resources')+' · '+shortName(list[i]&&list[i].name));
     }
     if(fresh>0) flashGlow('/api/');
-    setDetail('资源',Math.min(n,expected),expected);
-    status.textContent=n<expected?'正在下载界面资源…':'资源就绪，正在启动…';
+    setDetail(t('resources'),Math.min(n,expected),expected);
+    status.textContent=n<expected?t('downloading'):t('resourcesReady');
   }
   pour(0.02,120,0.5);
   var resTimer=setInterval(checkResources,140); checkResources();
@@ -605,7 +742,7 @@ function buildScript(cfg) {
   function onMount(){
     if(mounted) return; mounted=true;
     pour(0.025,180);
-    status.textContent='界面已就绪，正在载入内容…'; setDetail(null);
+    status.textContent=t('uiReady'); setDetail(null);
     if(mo) mo.disconnect();
   }
   if(root){
@@ -621,9 +758,9 @@ function buildScript(cfg) {
     try{ tracked=new URL(url,location.href).pathname.indexOf('/api')===0; }catch(e){}
     if(!tracked) return origFetch.apply(this,arguments);
     apiStarted++;
-    var nm=label(url), rid=pushRow(nm+' · '+shortName(url));
+    var nm=label(url), rid=pushRow(t(nm)+' · '+shortName(url));
     flashGlow(url);
-    status.textContent='正在载入'+nm+'…'; setDetail('请求',apiDone,apiStarted);
+    status.textContent=t('loadingTopic',{topic:t(nm)}); setDetail(t('requests'),apiDone,apiStarted);
     pour(0.008,110);
     var p;
     try{ p=origFetch.apply(this,arguments); }catch(e){ apiDone++; finishRow(rid); pour(0.012,130); throw e; }
@@ -632,8 +769,8 @@ function buildScript(cfg) {
   };
   var apiTimer=setInterval(function(){
     if(apiStarted>0){
-      setDetail('请求',apiDone,apiStarted);
-      if(mounted) status.textContent=apiDone<apiStarted?'内容载入中…':'内容已就绪';
+      setDetail(t('requests'),apiDone,apiStarted);
+      if(mounted) status.textContent=apiDone<apiStarted?t('contentLoading'):t('contentReady');
     }
   },180);
 
@@ -642,7 +779,7 @@ function buildScript(cfg) {
     clearInterval(resTimer); clearInterval(apiTimer);
     if(worker) worker.postMessage({type:'finish'});
     done=true;
-    status.textContent='已就绪'; setDetailText(reason||'');
+    status.textContent=t('done'); setDetailText(reason||'');
     el.classList.add('__done');
     setTimeout(function(){
       removed=true;
@@ -663,12 +800,12 @@ function buildScript(cfg) {
     var ready=mounted&&contentReady();
     if(ready&&!readySince) readySince=Date.now();
     var noPending=(apiStarted-apiDone)<=0;
-    if(ready&&noPending&&++steady>=2){ clearInterval(guard); finish('共 '+apiStarted+' 个请求'); return; }
+    if(ready&&noPending&&++steady>=2){ clearInterval(guard); finish(apiStarted?t('totalRequests',{n:apiStarted}):''); return; }
     if(!noPending) steady=0;
-    if(ready&&readySince&&Date.now()-readySince>1800){ clearInterval(guard); finish('内容已就绪'); return; }
+    if(ready&&readySince&&Date.now()-readySince>1800){ clearInterval(guard); finish(t('contentReady')); return; }
   },200);
   setTimeout(function(){ if(!done&&mounted&&apiStarted===0){ clearInterval(guard); finish(''); } },3500);
-  setTimeout(function(){ if(!done){ clearInterval(guard); finish('已超时，直接进入'); } },CFG.idleTimeoutMs);
+  setTimeout(function(){ if(!done){ clearInterval(guard); finish(t('timeout')); } },CFG.idleTimeoutMs);
 })();
 `;
 }

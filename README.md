@@ -81,6 +81,10 @@ Override in your own profile patch layer (`$DSH_HOME/cordis.patch.yml` or the pr
 
 | Option | Default | Description |
 |---|---|---|
+| `locale` | `"auto"` | `auto` follows the browser language; `zh` / `en` force one |
+| `texts` | `{}` | Override any string; keys listed below |
+| `icon` | `"whale"` | Plate icon: `whale` (dsh's own), `none`, an inline `<svg>…</svg>`, or an image URL |
+| `iconSize` | `30` | Icon edge length in px |
 | `mode` | `"realtime"` | `static` = sampled frost; `realtime` = real backdrop blur |
 | `blur` | `10` | Blur radius for `realtime` mode (px), 0-60 |
 | `noise` | `13` | Grain strength for `static` mode, 0-100 |
@@ -91,6 +95,34 @@ Override in your own profile patch layer (`$DSH_HOME/cordis.patch.yml` or the pr
 | `damping` | `0.35` | Damping. Too high and waves die before reaching the edges; too low and they ring |
 | `amplitude` | `46` | Surface amplitude in px |
 | `idleTimeoutMs` | `12000` | Hard timeout (ms) after which the overlay is removed regardless |
+
+### Text keys
+
+Keys accepted by `texts` (missing ones fall back to the built-in pack):
+
+`title` `connecting` `prep` `waiting` `resources` `requests` `downloading`
+`resourcesReady` `uiReady` `loadingTopic` `contentLoading` `contentReady`
+`done` `totalRequests` `timeout`
+`tSession` `tWorkspace` `tSettings` `tJob` `tAccount` `tTerminal` `tAttachment` `tContent`
+
+`{n}` / `{topic}` are substituted. Example:
+
+```yaml
+- id: betterloading
+  config:
+    locale: "en"
+    icon: "whale"
+    texts:
+      title: "Loading my harness"
+      connecting: "Waking up…"
+```
+
+The default icon is dsh's own whale (single path, `currentColor`, so it follows
+the light/dark theme). A URL also works:
+
+```yaml
+  icon: "https://example.com/my-logo.png"
+```
 
 ### Tuning hints
 

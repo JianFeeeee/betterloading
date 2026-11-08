@@ -75,6 +75,10 @@ dsh plugin --profile web remove dsh-betterloading
 
 | 选项 | 默认 | 说明 |
 |---|---|---|
+| `locale` | `"auto"` | `auto` 跟随浏览器语言；`zh` / `en` 强制指定 |
+| `texts` | `{}` | 覆盖任意文案，键见下方「文案键」 |
+| `icon` | `"whale"` | 铭牌图标：`whale`（dsh 鲸鱼）、`none`、内联 `<svg>…</svg>`、或图片 URL |
+| `iconSize` | `30` | 图标边长（px） |
 | `mode` | `"realtime"` | `static` = 静态采样磨砂；`realtime` = 真实背景模糊 |
 | `blur` | `10` | `realtime` 模式的模糊半径（px），0-60 |
 | `noise` | `13` | `static` 模式的颗粒强度，0-100 |
@@ -85,6 +89,33 @@ dsh plugin --profile web remove dsh-betterloading
 | `damping` | `0.35` | 阻尼。过大波传不到边缘，过小会一直震荡 |
 | `amplitude` | `46` | 水面振幅（px） |
 | `idleTimeoutMs` | `12000` | 硬超时（ms）。到点必定移除遮罩 |
+
+### 文案键
+
+`texts` 里可用的键（未提供的回落到内置语言包）：
+
+`title` `connecting` `prep` `waiting` `resources` `requests` `downloading`
+`resourcesReady` `uiReady` `loadingTopic` `contentLoading` `contentReady`
+`done` `totalRequests` `timeout`
+`tSession` `tWorkspace` `tSettings` `tJob` `tAccount` `tTerminal` `tAttachment` `tContent`
+
+值里的 `{n}` / `{topic}` 会被替换。例如：
+
+```yaml
+- id: betterloading
+  config:
+    locale: "zh"
+    icon: "whale"
+    texts:
+      title: "小宅的加载中"
+      connecting: "正在唤醒…"
+```
+
+图标默认是 dsh 自己的鲸鱼（单路径，`currentColor` 跟随明暗主题）。也可以给 URL：
+
+```yaml
+  icon: "https://example.com/my-logo.png"
+```
 
 ### 调参提示
 
