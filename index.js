@@ -220,7 +220,25 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
 #__bl_title{font-size:16px;font-weight:600;letter-spacing:.1em;opacity:.95}
 #__bl_status{margin-top:9px;font-size:12.5px;letter-spacing:.04em;opacity:.7;min-height:18px}
 #__bl_meta{margin-top:20px;font-size:11px;letter-spacing:.14em;opacity:.5;
-  font-variant-numeric:tabular-nums}
+  font-variant-numeric:tabular-nums;display:flex;align-items:center;justify-content:center;gap:.45em}
+
+/* 里程表式百分比：每位一列 0-9，靠 translateY 滚动 */
+#__bl_pct{display:inline-flex;align-items:flex-start;line-height:1;
+  font-variant-numeric:tabular-nums;font-weight:600;opacity:.9}
+.__bl_d{display:inline-block;position:relative;overflow:hidden;
+  height:1.15em;width:.62em}
+.__bl_col{display:flex;flex-direction:column;
+  transition:transform .34s cubic-bezier(.22,.7,.25,1)}
+.__bl_col i{display:block;height:1.15em;line-height:1.15em;font-style:normal;text-align:center}
+.__bl_sign{display:inline-block;margin-left:.06em}
+
+/* 内容变化时给铭牌一个轻微弹性，产生「中间帧」而不是硬切 */
+@keyframes __bl_bump{0%{transform:translateX(-50%) scale(1)}
+  42%{transform:translateX(-50%) scale(1.018)}100%{transform:translateX(-50%) scale(1)}}
+#__bl_text.__bump{animation:__bl_bump .34s cubic-bezier(.22,.7,.25,1)}
+@media (prefers-reduced-motion:reduce){
+  .__bl_col{transition:none}
+  #__bl_text.__bump{animation:none}}
 `;
 }
 
@@ -333,7 +351,44 @@ function buildScript(cfg) {
   /* ===== 百分比与框高的平滑 =====
      10Hz 的 state 消息直接写 textContent 是硬切；这里用 rAF 把显示值
      补间到目标值，同时把铭牌 height 显式化以便参与 CSS 过渡。 */
-  var shownPct=0, targetPct=0, pctRaf=0, lastPctTxt='';
+  var shownPct=0, targetPct=0, pctRaf=0;
+  /* 里程表：每位一个 0-9 的列，位数变化时重建，否则只滚 translateY */
+  var pctWrap=document.getElementById('__bl_pct'), odoCols=[], odoDigits=-1;
+  function buildOdo(n){
+    if(!pctWrap) return;
+    var str=String(n);
+    pctWrap.innerHTML=''; odoCols=[];
+    for(var i=0;i<str.length;i++){
+      var d=document.createElement('span'); d.className='__bl_d';
+      var col=document.createElement('span'); col.className='__bl_col';
+      for(var k=0;k<10;k++){
+        var it=document.createElement('i'); it.textContent=String(k); col.appendChild(it);
+      }
+      d.appendChild(col); pctWrap.appendChild(d); odoCols.push(col);
+    }
+    var sg=document.createElement('span'); sg.className='__bl_sign'; sg.textContent='%';
+    pctWrap.appendChild(sg);
+    odoDigits=str.length;
+  }
+  function paintOdo(n){
+    var str=String(n);
+    if(str.length!==odoDigits) buildOdo(n);
+    for(var i=0;i<str.length&&i<odoCols.length;i++){
+      var d=+str[i];
+      odoCols[i].style.transform='translateY('+(-d*1.15)+'em)';
+    }
+  }
+  var textEl=document.getElementById('__bl_text');
+  var bumpTimer=0;
+  function bumpPlate(){
+    if(!textEl) return;
+    textEl.classList.remove('__bump');
+    void textEl.offsetWidth;                 /* 强制重排以重启动画 */
+    textEl.classList.add('__bump');
+    clearTimeout(bumpTimer);
+    bumpTimer=setTimeout(function(){ if(textEl) textEl.classList.remove('__bump'); },380);
+  }
+  buildOdo(0);
   function tickPct(){
     if(removed) return;
     var d=targetPct-shownPct;
@@ -342,13 +397,13 @@ function buildScript(cfg) {
     } else if(shownPct!==targetPct){
       shownPct=targetPct;
     }
-    var txt=Math.round(shownPct)+'%';
-    if(txt!==lastPctTxt){ lastPctTxt=txt; pct.textContent=txt; }
+    var n=Math.round(shownPct);
+    if(n!==lastPctNum){ lastPctNum=n; paintOdo(n); }
     pctRaf=requestAnimationFrame(tickPct);
   }
+  var lastPctNum=-1;
   pctRaf=requestAnimationFrame(tickPct);
 
-  var textEl=document.getElementById('__bl_text');
   function syncPlateHeight(){
     if(!textEl) return;
     var prev=textEl.offsetHeight;
@@ -447,6 +502,7 @@ function buildScript(cfg) {
     }
     listEl.innerHTML=html;
     syncPlateHeight();
+    bumpPlate();
   }
   function pushRow(name){
     var id=++seq;
