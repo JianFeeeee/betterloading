@@ -94,7 +94,7 @@ Override in your own profile patch layer (`$DSH_HOME/cordis.patch.yml` or the pr
 | `waveSpeed` | `200` | c² of the wave equation. Higher travels faster |
 | `damping` | `0.35` | Damping. Too high and waves die before reaching the edges; too low and they ring |
 | `amplitude` | `46` | Surface amplitude in px |
-| `idleTimeoutMs` | `12000` | Hard timeout (ms) after which the overlay is removed regardless |
+| `idleTimeoutMs` | `30000` | Hard timeout (ms) after which the overlay is removed regardless |
 
 ### Text keys
 

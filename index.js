@@ -87,7 +87,7 @@ export const Config = z.object({
   amplitude: z.natural().min(6).max(80).default(46),
 
   /** 硬超时（ms）。到点无论如何都移除遮罩，绝不把用户永久挡在外面。 */
-  idleTimeoutMs: z.natural().min(2000).max(60000).default(12000),
+  idleTimeoutMs: z.natural().min(2000).max(60000).default(30000),
 });
 
 /**
@@ -316,9 +316,6 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
 #__bl_dnum{display:inline-flex;align-items:flex-start;margin-left:.45em}
 #__bl_dnum[hidden]{display:none}
 .__bl_sep{display:inline-block;margin:0 .28em;opacity:.55}
-#__bl_dl{transition:opacity .24s ease}
-#__bl_dl.__swap{animation:__bl_lbl .28s ease}
-@keyframes __bl_lbl{0%{opacity:.25}100%{opacity:1}}
 #__bl_detail .__bl_d{font-size:inherit;height:1.15em}
 
 /* 内容变化时给铭牌一个轻微弹性，产生「中间帧」而不是硬切 */
@@ -546,10 +543,8 @@ function buildScript(cfg) {
       return;
     }
     dnumEl.hidden=false;
-    if(lastLabel!==kind){
-      lastLabel=kind; dlEl.textContent=kind;
-      dlEl.classList.remove('__swap'); void dlEl.offsetWidth; dlEl.classList.add('__swap');
-    }
+    /* 标签只做纯切换：滚轮动画只属于数字，文字不该跟着动 */
+    if(lastLabel!==kind){ lastLabel=kind; dlEl.textContent=kind; }
     setDn(a); setDm(b);
   }
   function setDetailText(txt){
@@ -737,18 +732,32 @@ function buildScript(cfg) {
   var resTimer=setInterval(checkResources,140); checkResources();
   try{ new PerformanceObserver(function(){ checkResources(); }).observe({type:'resource',buffered:true}); }catch(e){}
 
-  var root=document.getElementById('root'),mo=null;
+  /* 挂载点必须延迟查找：所有注入行都插在 <body> 开头，脚本执行时
+     index.html 自己的 <div id="root"> 还没被解析，直接 getElementById 拿到 null，
+     mounted 就永远是 false —— 遮罩只能等硬超时。改为轮询 + 观察。 */
+  var mo=null;
   function onMount(){
     if(mounted) return; mounted=true;
     pour(0.025,180);
     status.textContent=t('uiReady'); setDetail(null);
-    if(mo) mo.disconnect();
+    if(mo){ mo.disconnect(); mo=null; }
   }
-  if(root){
-    mo=new MutationObserver(function(){ if(root.childNodes.length>0) onMount(); });
-    mo.observe(root,{childList:true,subtree:true});
-    if(root.childNodes.length>0) onMount();
+  function watchRoot(){
+    if(mounted) return true;
+    var root=document.getElementById('root');
+    if(!root) return false;
+    if(root.childNodes.length>0){ onMount(); return true; }
+    if(!mo){
+      mo=new MutationObserver(function(){
+        var r=document.getElementById('root');
+        if(r&&r.childNodes.length>0) onMount();
+      });
+      mo.observe(root,{childList:true,subtree:true});
+    }
+    return false;
   }
+  watchRoot();
+  var mountTimer=setInterval(function(){ if(watchRoot()) clearInterval(mountTimer); },100);
 
   var origFetch=window.fetch;
   window.fetch=function(input,init){
@@ -801,7 +810,7 @@ function buildScript(cfg) {
     var noPending=(apiStarted-apiDone)<=0;
     if(ready&&noPending&&++steady>=2){ clearInterval(guard); finish(apiStarted?t('totalRequests',{n:apiStarted}):''); return; }
     if(!noPending) steady=0;
-    if(ready&&readySince&&Date.now()-readySince>1800){ clearInterval(guard); finish(t('contentReady')); return; }
+    if(ready&&readySince&&Date.now()-readySince>800){ clearInterval(guard); finish(t('contentReady')); return; }
   },200);
   setTimeout(function(){ if(!done&&mounted&&apiStarted===0){ clearInterval(guard); finish(''); } },3500);
   setTimeout(function(){ if(!done){ clearInterval(guard); finish(t('timeout')); } },CFG.idleTimeoutMs);
