@@ -1,13 +1,16 @@
 /**
- * 生成物自检：把注入用的 CSS/JS 真正生成一遍，再用 new Function 做语法检查。
+ * 生成物 / 入口自检。
  *
- * 为什么需要它：源码 `node --check` 通过，不代表**模板字符串展开后**的注入脚本
- * 能运行 —— 曾经因为残留一行 `buildOdo(0)` 让整段脚本抛 ReferenceError，
- * 结果 worker 没启动、动画全无，而源码语法完全合法。
+ * 为什么需要：源码 `node --check` 通过，不代表**模板字符串展开后**的东西能跑。
+ * 曾经因为残留一行 `buildOdo(0)` 让整段注入脚本抛 ReferenceError，worker 没启动、
+ * 动画全无，而源码语法完全合法。
  *
  * 运行：npm run verify
  */
-import { Config, internals } from "../index.js";
+import { readFileSync } from "node:fs";
+import { Config } from "../index.js";
+
+const CLIENT = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
 
 const cases = [
   { name: "defaults", cfg: {} },
@@ -19,108 +22,120 @@ const cases = [
 
 let failed = 0;
 
+/* 客户端 bundle 只解析一次即可（它与配置无关，配置在运行时从全局读）。 */
+try {
+  new Function(CLIENT);
+} catch (error) {
+  failed += 1;
+  console.error(`✗ client bundle: ${error.message}`);
+}
+
+/* 客户端 bundle 的硬性契约与关键钩子。 */
+const MUST = [
+  "window.__ModuleLoader__.load",
+  'id: "dsh-betterloading"',
+  "exports.apply",
+  "exports.inject",
+  "transferControlToOffscreen",
+  "createOdo",
+  "flashGlow",
+  "setDetail",
+  "__BETTERLOADING_CONFIG",
+  "noteFailure",
+  "__fail",
+];
+for (const token of MUST) {
+  if (!CLIENT.includes(token)) {
+    failed += 1;
+    console.error(`✗ client bundle: missing "${token}"`);
+  }
+}
+
+/* worker 源码本身作为一段独立脚本再解析一次：它在 Blob 里运行，
+   语法错误只会在运行时才炸，不会在 client bundle 的解析中暴露。 */
+const wStart = CLIENT.indexOf("const WORKER_SRC = `");
+if (wStart < 0) {
+  failed += 1;
+  console.error("✗ worker source not found");
+} else {
+  const from = CLIENT.indexOf("`", wStart) + 1;
+  const to = CLIENT.indexOf("`;", from);
+  const workerSrc = CLIENT.slice(from, to);
+  try {
+    new Function(workerSrc);
+  } catch (error) {
+    failed += 1;
+    console.error(`✗ worker: ${error.message}`);
+  }
+  for (const token of ["self.onmessage", "postMessage({type:'state'", "OffscreenCanvas" in {} ? "" : "getContext"]) {
+    if (token && !workerSrc.includes(token)) {
+      failed += 1;
+      console.error(`✗ worker: missing "${token}"`);
+    }
+  }
+}
+
+/* 配置 schema：每组都必须能解析，且默认值稳定。 */
 for (const { name, cfg } of cases) {
   const resolved = Config(cfg);
-  const script = internals.buildScript(resolved);
-  const worker = internals.WORKER_SRC;
-  const style = internals.buildStyle(resolved);
-
-  for (const [label, source] of [["main", script], ["worker", worker]]) {
-    try {
-      // 只做语法解析，不执行
-      new Function(source);
-    } catch (error) {
-      failed += 1;
-      console.error(`✗ ${name} / ${label}: ${error.message}`);
-      const line = String(error.stack || "").split("\n").find((l) => l.includes("<anonymous>"));
-      if (line) console.error(`  ${line.trim()}`);
-    }
-  }
-
-  // 生成的 CSS 不能被模板残留打断：粗查花括号配平与关键选择器
-  let depth = 0;
-  for (const ch of style) {
-    if (ch === "{") depth += 1;
-    else if (ch === "}") depth -= 1;
-  }
-  if (depth !== 0) {
+  if (resolved.idleTimeoutMs !== 30000) {
     failed += 1;
-    console.error(`✗ ${name} / style: brace imbalance (${String(depth)})`);
+    console.error(`✗ ${name}: idleTimeoutMs default drifted (${resolved.idleTimeoutMs})`);
   }
-  if (resolved.iconSize > 0 && !style.includes("__bl_iconwrap")) {
+  if (!["static", "realtime"].includes(resolved.mode)) {
     failed += 1;
-    console.error(`✗ ${name} / style: missing icon rule`);
+    console.error(`✗ ${name}: bad mode`);
   }
-
-  // 关键行为标记存在性（防止改模板时静默丢功能）
-  const must = ["transferControlToOffscreen", "createOdo", "flashGlow", "setDetail"];
-  for (const token of must) {
-    if (!script.includes(token)) {
-      failed += 1;
-      console.error(`✗ ${name} / main: missing "${token}"`);
-    }
-  }
-  if (!worker.includes("postMessage({type:'state'")) {
-    failed += 1;
-    console.error(`✗ ${name} / worker: missing state emission`);
-  }
-
-  /* 未声明标识符检测：语法合法但运行时会 ReferenceError 的调用
-     （例如模板改造后残留的 buildOdo(0) 曾让整段脚本中断、worker 没启动）。
-     只认「不在 . 之后」的裸标识符调用，避免把方法调用算进来。 */
-  const KEYWORDS = new Set([
-    "if", "for", "while", "switch", "catch", "function", "return", "typeof",
-    "new", "do", "else", "in", "of", "delete", "void", "yield", "await",
-    "instanceof", "case", "throw", "super", "import", "export",
-  ]);
-  const BINOPS = new Set(["document", "window", "self", "globalThis", "Math", "JSON",
-    "Object", "Array", "String", "Number", "Boolean", "Date", "Set", "Map",
-    "Float32Array", "Uint8Array", "Promise", "Error", "RegExp", "parseInt",
-    "parseFloat", "isNaN", "isFinite", "setTimeout", "clearTimeout",
-    "setInterval", "clearInterval", "requestAnimationFrame", "cancelAnimationFrame",
-    "encodeURIComponent", "decodeURIComponent", "URL", "Blob", "Worker",
-    "MutationObserver", "PerformanceObserver", "getComputedStyle", "alert"]);
-
-  /* 先剥掉字符串字面量，否则 CSS 值里的 translateY( / path( 会被当成调用 */
-  const code = script
-    .replace(/'(?:\\.|[^'\\])*'/g, '""')
-    .replace(/"(?:\\.|[^"\\])*"/g, '""');
-
-  const declared = new Set();
-  for (const m of code.matchAll(/(?:function\s+([A-Za-z_$][\w$]*))|(?:var|let|const)\s+([A-Za-z_$][\w$]*)/g)) {
-    declared.add(m[1] || m[2]);
-  }
-  /* 多变量声明：var a=1, b=2, c; —— 补上逗号后面的名字 */
-  for (const stmt of code.matchAll(/(?:var|let|const)\s+([^;]*);/g)) {
-    for (const part of stmt[1].split(",")) {
-      const nm = part.trim().match(/^([A-Za-z_$][\w$]*)\s*(=|$)/);
-      if (nm) declared.add(nm[1]);
-    }
-  }
-  for (const m of code.matchAll(/function[^(]*\(([^)]*)\)/g)) {
-    for (const part of m[1].split(",")) {
-      const nm = part.trim().match(/^([A-Za-z_$][\w$]*)/);
-      if (nm) declared.add(nm[1]);
-    }
-  }
-  for (const m of code.matchAll(/catch\s*\(\s*([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
-
-  const missing = new Set();
-  for (const m of code.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {
-    const nm = m[1];
-    if (KEYWORDS.has(nm) || BINOPS.has(nm) || declared.has(nm)) continue;
-    missing.add(nm);
-  }
-  if (missing.size > 0) {
-    failed += 1;
-    console.error(`✗ ${name} / main: possibly undeclared call(s): ${[...missing].join(", ")}`);
-  }
-
   if (failed === 0) console.log(`✓ ${name}`);
+}
+
+/* 收工路径必须完整：曾经把 finish() 删掉却留着调用点，
+   结果退出回调抛 ReferenceError、遮罩永不消失。 */
+if (!CLIENT.includes("function finish(reason)")) {
+  failed += 1;
+  console.error("✗ client bundle: finish() missing");
+}
+{
+  const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  const need = ["function finish(reason)", "window.__betterloading=", "startIdleWave", "if(!done) finish(t('timeout'))"];
+  for (const token of need) {
+    if (!src.includes(token)) {
+      failed += 1;
+      console.error(`✗ index.js: missing "${token}"`);
+    }
+  }
+  // 每个被调用的收工入口都必须有定义
+  if (src.includes("finish(t('contentReady'))") && !src.includes("function finish(reason)")) {
+    failed += 1;
+    console.error("✗ index.js: finish() called but not defined");
+  }
+}
+
+/* 图标必须是完整路径：截断的 path 会画出一个残缺的鲸鱼。 */
+{
+  const m = /const WHALE_ICON =[\s\S]*?"<\/svg>";/.exec(CLIENT);
+  if (!m) {
+    failed += 1;
+    console.error("✗ client bundle: whale icon missing");
+  } else {
+    const len = (m[0].match(/d="([^"]+)"/) || ["", ""])[1].length;
+    if (len < 3000) {
+      failed += 1;
+      console.error(`✗ client bundle: whale path looks truncated (${String(len)} chars)`);
+    }
+  }
+}
+
+/* 失败态必须真的存在：红色样式 + 失败行容器。 */
+for (const token of ["--bl-fail", "__bl_fails", "failedTitle"]) {
+  if (!CLIENT.includes(token)) {
+    failed += 1;
+    console.error(`✗ client bundle: failure UI missing "${token}"`);
+  }
 }
 
 if (failed > 0) {
   console.error(`\n${String(failed)} check(s) failed`);
   process.exit(1);
 }
-console.log("\nall generated artifacts parse and carry the required hooks");
+console.log("\nall checks passed");

@@ -292,6 +292,17 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
              padding .26s cubic-bezier(.22,.7,.25,1)}
 #__bl_text::before{content:"";position:absolute;inset:1px;border-radius:15px;
   pointer-events:none;background:var(--bl-glow)}
+/* 失败态：铭牌转红并列出失败项 */
+#__bl_text.__fail{border-color:#e5484d;box-shadow:0 0 0 1px #e5484d,var(--bl-shadow)}
+#__bl.__fail #__bl_frost{background-color:rgba(229,72,77,.10)}
+#__bl_title.__fail{color:#e5484d}
+#__bl_fails{margin-top:12px;padding-top:10px;border-top:1px solid var(--bl-edge);
+  text-align:left;font-size:11.5px;line-height:1.7;color:#e5484d;display:none}
+#__bl_fails.__on{display:block}
+.__bl_fail_row{display:flex;gap:6px;align-items:flex-start;animation:__bl_rowin .26s both}
+.__bl_fail_name{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:52%}
+.__bl_fail_reason{flex:1 1 auto;opacity:.8;font-size:11px}
+
 #__bl_title{font-size:16px;font-weight:600;letter-spacing:.1em;opacity:.95}
 #__bl_status{margin-top:9px;font-size:12.5px;letter-spacing:.04em;opacity:.7;min-height:18px}
 #__bl_meta{margin-top:20px;font-size:11px;letter-spacing:.14em;opacity:.5;
@@ -338,6 +349,7 @@ const HTML = `
     <div id="__bl_title"></div>
     <div id="__bl_status">正在连接…</div>
     <div id="__bl_list"></div>
+    <div id="__bl_fails"></div>
     <div id="__bl_meta"><span id="__bl_detail"><span id="__bl_dl"></span><span id="__bl_dnum"><span id="__bl_dn"></span><span class="__bl_sep">/</span><span id="__bl_dm"></span></span></span> &nbsp;·&nbsp; <span id="__bl_pct">0%</span></div>
   </div>
 </div>
@@ -366,6 +378,8 @@ const HTML = `
 function buildScript(cfg) {
   return `
 (function(){
+  /* 持久标记：告诉客户端 bundle「web 端已由 host 接管」，
+     不能靠 DOM 判断 —— host 这套可能在 bundle 执行前就 finish 并移除骨架。 */
   var el=document.getElementById('__bl'); if(!el) return;
   var status=document.getElementById('__bl_status'),
       detail=document.getElementById('__bl_detail'),
@@ -440,7 +454,7 @@ function buildScript(cfg) {
     if(pr) pr.textContent=t('prep');
   })();
 
-  var mounted=false, done=false, removed=false, apiStarted=0, apiDone=0;
+  var done=false, removed=false;
 
   var worker=null, offscreen=false;
 
@@ -608,15 +622,14 @@ function buildScript(cfg) {
 
   /* ===== 加载高亮框池 ===== */
   var GLOW_MAX=CFG.glowMax||6, glowPool=[], glowBusy=[];
-  (function buildPool(){
-    if(!glowHost) return;
-    for(var i=0;i<GLOW_MAX;i++){
-      var g=document.createElement('div');
-      g.className='bl-glow';
-      glowHost.appendChild(g);
-      glowPool.push(g);
-    }
-  })();
+  function addGlow(){
+    if(!glowHost) return null;
+    var g=document.createElement('div');
+    g.className='bl-glow';
+    glowHost.appendChild(g);
+    return g;
+  }
+  (function buildPool(){ for(var i=0;i<GLOW_MAX;i++){ var g=addGlow(); if(g) glowPool.push(g); } })();
   function regionRect(url){
     var W=window.innerWidth, H=window.innerHeight, p='';
     try{ p=new URL(url,location.href).pathname; }catch(e){}
@@ -633,9 +646,10 @@ function buildScript(cfg) {
       var at=glowBusy.indexOf(item);
       if(at>=0) glowBusy.splice(at,1);
       glowPool.push(item.el);
-    },420);
+    },340);
   }
   function flashGlow(url){
+    if(window.__blDiag) window.__blDiag.flashCalls++;
     if(!glowPool.length&&!glowBusy.length) return;
     if(done) return;
     var r=regionRect(url), i;
@@ -644,12 +658,17 @@ function buildScript(cfg) {
       if(Math.abs(b.x-r.x)<2&&Math.abs(b.y-r.y)<2&&Math.abs(b.w-r.w)<2){ lightGlow(b); return; }
     }
     var el=glowPool.shift();
-    if(!el) return;
+    if(!el){
+      if(glowBusy.length>=12) return;
+      el=addGlow();
+      if(!el) return;
+    }
     el.style.width=r.w+'px'; el.style.height=r.h+'px';
     el.style.transform='translate3d('+r.x+'px,'+r.y+'px,0)';
     var item={el:el,x:r.x,y:r.y,w:r.w};
     glowBusy.push(item);
     lightGlow(item);
+    if(window.__blDiag){ window.__blDiag.lit++; window.__blDiag.peak=Math.max(window.__blDiag.peak||0,glowBusy.length); }
   }
 
   /* ===== 铭牌清单 ===== */
@@ -709,55 +728,10 @@ function buildScript(cfg) {
   }
 
   /* ===== 加载事件 → 落一团水 ===== */
-  var expected=document.querySelectorAll('script[src],link[rel=stylesheet],link[rel=modulepreload]').length||4;
-  var seen={};
-  function checkResources(){
-    var list=[]; try{ list=performance.getEntriesByType('resource')||[]; }catch(e){}
-    var n=0,fresh=0,i;
-    for(i=0;i<list.length;i++){
-      var e=list[i];
-      if(!(/[.](js|css|svg|woff2?|png|jpg)([?]|$)/.test(e.name)||e.initiatorType==='script'||e.initiatorType==='link')) continue;
-      n++;
-      if(!seen[e.name]){ seen[e.name]=1; fresh++; }
-    }
-    for(i=0;i<fresh&&i<expected;i++){
-      pour(0.018,150+i*40);
-      pushRow(t('resources')+' · '+shortName(list[i]&&list[i].name));
-    }
-    if(fresh>0) flashGlow('/api/');
-    setDetail(t('resources'),Math.min(n,expected),expected);
-    status.textContent=n<expected?t('downloading'):t('resourcesReady');
-  }
-  pour(0.02,120,0.5);
-  var resTimer=setInterval(checkResources,140); checkResources();
-  try{ new PerformanceObserver(function(){ checkResources(); }).observe({type:'resource',buffered:true}); }catch(e){}
 
   /* 挂载点必须延迟查找：所有注入行都插在 <body> 开头，脚本执行时
      index.html 自己的 <div id="root"> 还没被解析，直接 getElementById 拿到 null，
-     mounted 就永远是 false —— 遮罩只能等硬超时。改为轮询 + 观察。 */
-  var mo=null;
-  function onMount(){
-    if(mounted) return; mounted=true;
-    pour(0.025,180);
-    status.textContent=t('uiReady'); setDetail(null);
-    if(mo){ mo.disconnect(); mo=null; }
-  }
-  function watchRoot(){
-    if(mounted) return true;
-    var root=document.getElementById('root');
-    if(!root) return false;
-    if(root.childNodes.length>0){ onMount(); return true; }
-    if(!mo){
-      mo=new MutationObserver(function(){
-        var r=document.getElementById('root');
-        if(r&&r.childNodes.length>0) onMount();
-      });
-      mo.observe(root,{childList:true,subtree:true});
-    }
-    return false;
-  }
-  watchRoot();
-  var mountTimer=setInterval(function(){ if(watchRoot()) clearInterval(mountTimer); },100);
+
 
   /* ===== 「历史已加载」的准确信号 =====
      dsh 前端首屏用 session.list 拉会话历史（客户端源码：
@@ -773,103 +747,281 @@ function buildScript(cfg) {
     return null;
   }
 
-  var origFetch=window.fetch;
-  window.fetch=function(input,init){
-    var url=(typeof input==='string')?input:(input&&input.url)||'';
-    var tracked=false;
-    try{ tracked=new URL(url,location.href).pathname.indexOf('/api')===0; }catch(e){}
-    if(!tracked) return origFetch.apply(this,arguments);
-    var crit=critOf(url);
-    if(crit==='session'){ if(historySignal!=='done') historySignal='pending'; if(!historySeenAt) historySeenAt=Date.now(); }
-    else if(crit==='job'){ if(jobSignal!=='done') jobSignal='pending'; }
-    apiStarted++;
-    var nm=label(url), rid=pushRow(t(nm)+' · '+shortName(url));
-    flashGlow(url);
-    status.textContent=t('loadingTopic',{topic:t(nm)}); setDetail(t('requests'),apiDone,apiStarted);
-    pour(0.008,110);
-    var p;
-    try{ p=origFetch.apply(this,arguments); }catch(e){ apiDone++; finishRow(rid); pour(0.012,130); throw e; }
-    return p.then(function(r){
-        apiDone++; finishRow(rid); pour(0.012,130);
-        if(crit==='session') historySignal='done';
-        else if(crit==='job') jobSignal='done';
-        return r;
-      },
-      function(e){
-        apiDone++; finishRow(rid); pour(0.012,130);
-        if(crit==='session') historySignal='done';   /* 失败也算「不再是 pending」 */
-        else if(crit==='job') jobSignal='done';
-        throw e;
-      });
-  };
-  var apiTimer=setInterval(function(){
-    if(apiStarted>0){
-      setDetail(t('requests'),apiDone,apiStarted);
-      if(mounted) status.textContent=apiDone<apiStarted?t('contentLoading'):t('contentReady');
-    }
-  },180);
+  /* ============================================================
+   * 静态层职责：只要「不难看、不白屏、有动画」。
+   *
+   * 刻意不在这里判断加载是否完成、也不包装 fetch —— 那是动态层的事：
+   * 能拿到官方事件的插件（客户端 bundle 注入 sessions，订阅
+   * api-session/added|error|status）用下面暴露的接口接续。
+   * 静态层在无人接续时也能独立成立：定时波浪 + 缓慢上升，永不停在空屏。
+   * ========================================================== */
 
+  var visualTimer=null;
+  function startIdleWave(){
+    if(visualTimer) return;
+    visualTimer=setInterval(function(){
+      if(done) return;
+      pour(0.010+Math.random()*0.010, 150+Math.random()*140);
+    },430);
+  }
+  /* ---- 资源阶段：用标准 Performance API 采信息（清单 / 泛光 / 水位）----
+     这不是判定「是否加载完成」，只是把浏览器看得到的资源进度显示出来；
+     完成与失败的判定仍留给动态层的官方事件。 */
+  var expected=(function(){
+    var els=document.querySelectorAll('script[src],link[rel=stylesheet],link[rel=modulepreload]');
+    var c=0;
+    for(var i=0;i<els.length;i++){
+      var u=els[i].src||els[i].href||'';
+      if(u.indexOf('/plugins')>=0||u.indexOf('/api')>=0) continue;
+      c++;
+    }
+    return c||3;
+  })();
+  var seen={};
+  function checkResources(){
+    var list=[]; try{ list=performance.getEntriesByType('resource')||[]; }catch(e){}
+    var n=0,fresh=0,i;
+    for(i=0;i<list.length;i++){
+      var e=list[i], nm=e.name||'';
+      /* 排除两类噪音：
+         - /plugins/??a,b,c 是客户端插件的合并 bundle（十几 MB，一个条目，
+           会把清单占满、让 n/m 立刻到顶）
+         - /api/* 是 RPC，由动态层负责，不算静态资源 */
+      if(nm.indexOf('/plugins')>=0||nm.indexOf('/api')>=0) continue;
+      var looksLikeFile=/[.](js|css|svg|woff2?|png|jpg)([?]|$)/.test(nm);
+      if(!looksLikeFile&&e.initiatorType!=='script'&&e.initiatorType!=='link'&&e.initiatorType!=='css') continue;
+      n++;
+      if(!seen[nm]){ seen[nm]=1; fresh++; }
+    }
+    /* 每个新出现的资源都落一团水 + 一个泛光框（后半段的 chunk、字体、
+       图片也会走到这里）。框按资源所在区域映射，不再固定成「主区域」。 */
+    for(i=0;i<list.length;i++){
+      var r0=list[i], nm0=r0&&r0.name||'';
+      if(!fresh) break;
+      if(!seen['flashed:'+nm0]&&nm0.indexOf('/plugins')<0&&nm0.indexOf('/api')<0){
+        seen['flashed:'+nm0]=1;
+        pour(0.014,150+Math.random()*90);
+        var rid0=pushRow(t('resources')+' · '+shortName(nm0));
+        /* 资源已经加载完才会出现在 entries 里，所以立刻标记完成，
+           耗时取该条目自己的 duration（不是 push 到现在的时间）。 */
+        for(var ri=0;ri<rows.length;ri++){
+          if(rows[ri].id===rid0){
+            rows[ri].done=true;
+            rows[ri].ms=Math.max(0,Math.round(r0.duration||0));
+            renderList();
+            break;
+          }
+        }
+        flashGlow(nm0);
+        if(window.__blDiag) window.__blDiag.resourceGlow++;
+        if(--fresh<=0) break;
+      }
+    }
+    setDetail(t('resources'),Math.min(n,expected),expected);
+    status.textContent=n<expected?t('downloading'):t('resourcesReady');
+  }
+  var resTimer=setInterval(checkResources,140); checkResources();
+  try{ new PerformanceObserver(function(){ checkResources(); }).observe({type:'resource',buffered:true}); }catch(e){}
+
+  /* ---- 挂载信号：只用来更新文案与补一团水，不做完成判定 ---- */
+  var mo=null, mountFired=false;
+  function watchRoot(){
+    if(mountFired) return true;
+    var root=document.getElementById('root');
+    if(!root) return false;
+    if(root.childNodes.length>0){
+      mountFired=true;
+      pour(0.025,180);
+      status.textContent=t('uiReady');
+      setDetail(null);
+      if(mo){ mo.disconnect(); mo=null; }
+      return true;
+    }
+    if(!mo){
+      mo=new MutationObserver(function(){
+        var r=document.getElementById('root');
+        if(r&&r.childNodes.length>0) watchRoot();
+      });
+      mo.observe(root,{childList:true,subtree:true});
+    }
+    return false;
+  }
+  watchRoot();
+  var mountTimer=setInterval(function(){ if(watchRoot()) clearInterval(mountTimer); },100);
+
+  pour(0.03,120,0.5);
+  startIdleWave();
+
+  /* ---- 失败态 ---- */
+  var fails=[], FAIL_MAX=3, failShown=false;
+  function esc(v){
+    return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function renderFails(){
+    var box=document.getElementById('__bl_fails');
+    var plate=document.getElementById('__bl_text');
+    if(!box) return;
+    var on=fails.length>0;
+    box.classList.toggle('__on',on);
+    if(plate) plate.classList.toggle('__fail',on);
+    if(el) el.classList.toggle('__fail',on);
+    var titleEl=document.getElementById('__bl_title');
+    if(titleEl) titleEl.classList.toggle('__fail',on);
+    if(!on){ box.innerHTML=''; if(titleEl) titleEl.textContent=t('title'); failShown=false; return; }
+    if(!failShown){ failShown=true; if(titleEl) titleEl.textContent=t('failedTitle'); }
+    var html='';
+    for(var i=0;i<fails.length&&i<FAIL_MAX;i++){
+      html+='<div class="__bl_fail_row"><span class="__bl_fail_name">'+esc(fails[i].name)+
+            '</span><span class="__bl_fail_reason">'+esc(fails[i].reason)+'</span></div>';
+    }
+    if(fails.length>FAIL_MAX){
+      html+='<div class="__bl_fail_row"><span class="__bl_fail_reason">'+
+            t('failedMore',{n:fails.length-FAIL_MAX})+'</span></div>';
+    }
+    box.innerHTML=html;
+    if(typeof syncPlateHeight==='function') syncPlateHeight();
+  }
+  function noteFailure(name,reason){
+    if(done||removed) return;
+    if(fails.length>=24) return;
+    fails.push({name:name||'?',reason:reason||'unknown'});
+    renderFails();
+  }
+
+  /* ============================================================
+   * 对外接口：动态层（官方事件）用它驱动这层视觉。
+   * 没有动态层接续时，定时波浪也能独立跑完整段加载。
+   * ========================================================== */
+  /* ---- 收工 ---- */
+  var finishRetry=0;
   function finish(reason){
     if(done) return;
-    clearInterval(resTimer); clearInterval(apiTimer);
-    if(worker) worker.postMessage({type:'finish'});
+    /* 守卫：事件说「好了」但页面还没挂内容时，延后再收工，
+       避免出现「遮罩消失但页面是空的」。最多重试 6 次（约 3s）。 */
+    var rootEl=document.getElementById('root');
+    var painted=!!(rootEl&&rootEl.childNodes.length>0);
+    if(!painted&&finishRetry<6){
+      finishRetry++;
+      setTimeout(function(){ finish(reason); },500);
+      return;
+    }
     done=true;
-    status.textContent=t('done'); setDetailText(reason||'');
-    /* 诊断：完成时的判定依据。排查「触发点不对」时直接读
-       window.__betterloadingDone，不必猜。 */
+    if(visualTimer){ clearInterval(visualTimer); visualTimer=null; }
+    if(resTimer){ clearInterval(resTimer); resTimer=null; }
+    if(worker) worker.postMessage({type:'finish'});
+    var st=document.getElementById('__bl_status');
+    if(st) st.textContent=t('done');
+    setDetailText(reason||'');
     try{
       var rr=document.getElementById('root');
       window.__betterloadingDone={
         reason:reason||'',
-        historySignal:historySignal||'none',
-        jobSignal:jobSignal||'none',
-        mounted:mounted,
+        failed:(typeof fails!=='undefined')?fails.length:0,
         rootText:rr?(rr.innerText||'').length:-1,
-        rootElems:rr?rr.querySelectorAll('*').length:-1,
-        apiStarted:apiStarted, apiDone:apiDone,
         atMs:Math.round(performance.now())
       };
     }catch(e){}
-    el.classList.add('__done');
+    if(el) el.classList.add('__done');
     setTimeout(function(){
       removed=true;
-      cancelAnimationFrame(pctRaf);
       if(worker){ worker.terminate(); worker=null; }
       if(el&&el.parentNode) el.parentNode.removeChild(el);
     },1500);
-    window.fetch=origFetch;
   }
-  function contentReady(){
-    var r=document.getElementById('root');
-    if(!r) return false;
-    return (r.innerText||'').length>60 || r.querySelectorAll('button,[role=button],input').length>4;
-  }
-  var steady=0, readySince=0, historyDoneAt=0, guardStart=Date.now();
-  var guard=setInterval(function(){
+
+  /* ---- 退出 ----
+     正常退出由动态层驱动：客户端 bundle 订阅官方 sessions 事件
+     （api-session/added 的静默期 = 历史填充完毕），然后调本接口 finish()。
+     这里只保留硬超时，保证「动态层没接续」时也不会永久遮挡 ——
+     不再用「#root 里有几个字」这种启发式判断。 */
+  setTimeout(function(){ if(!done) finish(t('timeout')); },CFG.idleTimeoutMs);
+
+  window.__blDiag={flashCalls:0,lit:0,peak:0,domGlow:0,resourceGlow:0};
+
+  /* ---- DOM 元素级泛光 ----
+     后半段的元素多是 React 渲染出来的，没有网络资源条目，只能观察 DOM。
+     小元素自己画框看不出来，所以取「新增节点所在的可见块」：
+     优先用尺寸足够大的父容器区域，其次才是元素本身。 ---- */
+  (function watchDomGlow(){
+    if(typeof MutationObserver!=='function') return;
+    var pending=[];
+    try{
+      new MutationObserver(function(muts){
+        for(var i=0;i<muts.length;i++){
+          var added=muts[i].addedNodes;
+          for(var j=0;j<added.length;j++){
+            var n=added[j];
+            if(!n||n.nodeType!==1) continue;
+            if(n.id&&n.id.indexOf('__bl')===0) continue;
+            pending.push(n);
+            if(pending.length>200) pending.splice(0,100);
+          }
+        }
+      }).observe(document.body,{childList:true,subtree:true});
+    }catch(e){ return; }
+
+    function areaFor(node){
+      /* 向上找第一个「够大」的祖先作为高亮区域；找不到就用自己 */
+      var cur=node, best=null;
+      for(var d=0;d<5&&cur;d++){
+        var r=cur.getBoundingClientRect();
+        if(r.width>=120&&r.height>=40&&r.bottom>0&&r.top<window.innerHeight){
+          best={r:r,area:r.width*r.height};
+          break;
+        }
+        cur=cur.parentElement;
+      }
+      if(best) return best.r;
+      var r0=node.getBoundingClientRect();
+      if(r0.width<8||r0.height<8) return null;
+      if(r0.bottom<0||r0.top>window.innerHeight) return null;
+      return r0;
+    }
+
+    setInterval(function(){
+      if(done||!pending.length) return;
+      var batch=pending; pending=[];
+      var shown=0;
+      for(var i=0;i<batch.length&&shown<4;i++){
+        var n=batch[i];
+        if(!n.isConnected) continue;
+        var r=areaFor(n);
+        if(!r) continue;
+        flashGlowRect(r);
+        shown++;
+      }
+    },220);
+  })();
+
+  function flashGlowRect(r){
     if(done) return;
+    if(!glowPool.length&&glowBusy.length>=12) return;
+    var g=glowPool.shift();
+    if(!g){ g=addGlow(); if(!g) return; }
+    var pad=4;
+    g.style.width=Math.max(28,r.width+pad*2)+'px';
+    g.style.height=Math.max(16,r.height+pad*2)+'px';
+    g.style.transform='translate3d('+Math.max(0,r.left-pad)+'px,'+Math.max(0,r.top-pad)+'px,0)';
+    var item={el:g,x:r.left,y:r.top,w:r.width};
+    glowBusy.push(item);
+    lightGlow(item);
+  }
 
-    /* 主判定：会话历史真的加载完了（且页面已挂载），200ms 后收工 */
-    var critOk=(historySignal!=='pending')&&(jobSignal!=='pending');
-    if(mounted&&historySignal==='done'&&critOk){
-      if(!historyDoneAt) historyDoneAt=Date.now();
-      if(Date.now()-historyDoneAt>200){ clearInterval(guard); finish(t('contentReady')); return; }
-    }else{
-      historyDoneAt=0;
-    }
-
-    /* 兜底：历史信号始终没出现（版本差异/无历史）→ 退回内容启发式 */
-    var noHistorySignal=(historySignal===undefined)&&(Date.now()-guardStart>3000);
-    var ready=mounted&&contentReady();
-    if(ready&&!readySince) readySince=Date.now();
-    var noPending=(apiStarted-apiDone)<=0;
-    if(ready&&noPending&&(noHistorySignal||historySignal==='done')&&++steady>=2){
-      clearInterval(guard); finish(apiStarted?t('totalRequests',{n:apiStarted}):''); return;
-    }
-    if(!noPending) steady=0;
-    if(ready&&readySince&&Date.now()-readySince>800){ clearInterval(guard); finish(t('contentReady')); return; }
-  },200);
-  setTimeout(function(){ if(!done&&mounted&&apiStarted===0){ clearInterval(guard); finish(''); } },3500);
-  setTimeout(function(){ if(!done){ clearInterval(guard); finish(t('timeout')); } },CFG.idleTimeoutMs);
+  window.__betterloading={
+    version:1,
+    pour:function(v,f,p){ pour(v,f,p); },
+    finish:function(reason){ finish(reason); },
+    fail:function(name,reason){ noteFailure(name,reason); },
+    status:function(txt){ var st=document.getElementById('__bl_status'); if(st) st.textContent=txt; },
+    row:function(name){ return pushRow(name); },
+    rowDone:function(id){ finishRow(id); },
+    detail:function(a,b,c){ if(b===undefined) setDetailText(a); else setDetail(a,b,c); },
+    glow:function(url){ flashGlow(url); },
+    get done(){ return done; }
+  };
+  /* 让动态层知道静态层已经就位 */
+  window.__BETTERLOADING_HOST__=true;
 })();
 `;
 }
