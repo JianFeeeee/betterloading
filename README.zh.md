@@ -154,6 +154,11 @@ dsh plugin --profile web remove dsh-betterloading
   `file://` 加载已构建文件，并经 IPC 桥接发送 fetch 请求，不使用本服务器。」
   改成客户端插件也没用：`dsh-client-modules` 会拒绝任何不是 `"web"` 的
   `dsh.client.platform`（`if (decl === void 0 || decl.platform !== "web") return null`）。
+- 桌面端默认不生效，需要额外改造：[`docs/desktop.md`](docs/desktop.md) 是写给
+  coding agent 的操作说明——如何定位打包的 `index.html`、用
+  [`scripts/patch-desktop-index.mjs`](scripts/patch-desktop-index.mjs) 把注入内容移植过去，
+  或者让 Electron 调用 `renderIndex` 以保留设置页；也包括「什么情况下应当停下来
+  如实说做不到」。
 - 只作用于 dsh 的 **Web UI**，不改变服务端行为。
 - 依赖 dsh 的 `webserver/index-inject` 事件与 `#root` 结构。dsh 大版本改动后可能需要跟进。
 - 隐藏 dsh 自带 boot 屏用的是**结构选择器**（类名含 `_boot_`），因为它的类名带 hash、会随打包变化。失败提示卡片特意保持可见。

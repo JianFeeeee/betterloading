@@ -174,7 +174,7 @@ Water-level state machine:
 
 ## Known limitations
 
-- **Does not work in dsh Desktop (Electron).** The overlay is injected through
+- **Does not work in dsh Desktop (Electron) out of the box.** The overlay is injected through
   `webserver/index-inject`, which only affects the index served by
   `@deepseek-ai/dsh-host-webserver` / `dsh-host-frontend-static`. Desktop is an
   Electron shell around the same Web app: it *does* run a Web Host (on an
@@ -187,6 +187,12 @@ Water-level state machine:
   A client bundle would not help either: `dsh-client-modules` rejects any
   `dsh.client.platform` other than `"web"`
   (`if (decl === void 0 || decl.platform !== "web") return null`).
+- A client bundle would not help either, so making it work there requires patching the
+  desktop build. [`docs/desktop.md`](docs/desktop.md) is an instruction sheet written for a
+  coding agent: how to locate the packaged `index.html`, transplant the injection rows with
+  [`scripts/patch-desktop-index.mjs`](scripts/patch-desktop-index.mjs), or make Electron call
+  `renderIndex` so the settings page keeps working — plus the conditions under which it should
+  stop and report it as impossible.
 - Affects the dsh **web UI** only; server behaviour is unchanged.
 - Depends on dsh's `webserver/index-inject` event and the `#root` structure. A major dsh change may require follow-up.
 - dsh's own boot screen is hidden via a **structural selector** (class contains `_boot_`) because its class names carry build hashes. The failure card is deliberately left visible.

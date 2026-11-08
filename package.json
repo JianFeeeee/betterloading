@@ -20,7 +20,8 @@
     "README.zh.md",
     "LICENSE",
     "locale",
-    "icon.svg"
+    "icon.svg",
+    "docs"
   ],
   "keywords": [
     "dsh",
