@@ -568,7 +568,6 @@ function buildScript(cfg) {
     clearTimeout(bumpTimer);
     bumpTimer=setTimeout(function(){ if(textEl) textEl.classList.remove('__bump'); },380);
   }
-  buildOdo(0);
   function tickPct(){
     if(removed) return;
     var d=targetPct-shownPct;
@@ -1003,5 +1002,8 @@ export function apply(ctx, config) {
     });
   });
 }
+
+/** 内部构造器，仅供自检脚本使用（不参与运行时契约）。 */
+export const internals = { buildStyle, buildScript, WORKER_SRC };
 
 export default { name, inject, Config, apply };
