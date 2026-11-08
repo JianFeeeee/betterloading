@@ -90,13 +90,20 @@ for (const { name, cfg } of cases) {
     failed += 1;
     console.error(`✗ ${name}: bad mode default`);
   }
-  /* 反向断言：字段**不能**是 volatile。字段级 volatile 会把输入类型改成
-     稳定引用包装，dsh 用 Config 校验配置时裸值被拒，插件直接不激活
-     （ValidationError: $.mode expected ... but got {}）。 */
-  const wronglyVolatile = Object.entries(dict).filter(([, f]) => f?.meta?.volatile === true).map(([k]) => k);
-  if (wronglyVolatile.length > 0) {
+  /* 正向断言：设置页表单要求**每个字段**都带 .volatile()
+     （dsh-settings 的 volatileForm 只收集这类字段）。
+     前提是 host 侧不读这些值 —— apply() 必须用非 volatile 的 fields({})。 */
+  const plainFields = Object.entries(dict).filter(([, f]) => f?.meta?.volatile !== true).map(([k]) => k);
+  if (plainFields.length > 0) {
     failed += 1;
-    console.error(`✗ ${name}: volatile fields break config validation: ${wronglyVolatile.join(", ")}`);
+    console.error(`✗ ${name}: fields without .volatile() (no Settings form): ${plainFields.join(", ")}`);
+  }
+  {
+    const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    if (/const cfg = Config\(/.test(src)) {
+      failed += 1;
+      console.error("✗ index.js: apply() reads the volatile Config — that breaks config validation");
+    }
   }
   if (failed === 0) console.log(`✓ ${name}`);
 }

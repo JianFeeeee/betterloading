@@ -91,18 +91,28 @@ const fields = z.object({
 });
 
 /**
- * 注意：这里**不能**给字段加 `.volatile()`。
+ * 插件 Config（dsh >= 0.1.7-alpha.1 的「新 seam」）。
  *
- * dsh-settings 的 volatileForm() 会收集带 meta.volatile 的字段生成设置页
- * 表单，但字段一旦 volatile，它的**输入类型**就变成「稳定引用」包装：
- * dsh 用这个 Config 校验配置时，裸值会被拒 ——
- *   ValidationError: $.mode expected "static" | "realtime" but got {}
- * 结果整个插件在启动时不激活（警告 "1 entry did not activate"）。
+ * 每个字段都带 `.volatile()`：settings 服务只把这些字段投影成设置页表单，
+ * 表单名 = 活动 profile 条目 id（cordis.patch.yml 里 insert 行的 id）。
  *
- * 所以设置页表单需要另一条路径（见 README 的 Known limitations）；
- * 当前优先保证插件本身可用。
+ * 关键约束（来自 catppuccin 的实测与注释）：volatile 字段的值是**客户端专属**的
+ * 「稳定引用」，**host 侧不要读它**。所以 apply() 用非 volatile 的 `fields`
+ * 取默认值生成注入骨架，用户配置由客户端通过官方的 configForms 读取后
+ * 运行时应用（window.__betterloading.configure）。
  */
-export const Config = fields;
+export const ENTRY_ID = "betterloading";
+
+/** 逐字段 `.volatile()`：整个 object 标记会折叠字段枚举。 */
+function Schema_object_volatile() {
+  return z.object(
+    Object.fromEntries(
+      Object.entries(fields.dict ?? {}).map(([key, field]) => [key, field.volatile()]),
+    ),
+  );
+}
+
+export const Config = Schema_object_volatile();
 /**
  * 把配置里的颜色化成 "r,g,b" 供 CSS 的 rgba(var(--x),alpha) 使用。
  * 支持 #rgb / #rrggbb / rgb() / rgba()；解析不了就回退到默认蓝。
@@ -1118,6 +1128,43 @@ function buildScript(cfg) {
     rowDone:function(id){ finishRow(id); },
     detail:function(a,b,c){ if(b===undefined) setDetailText(a); else setDetail(a,b,c); },
     glow:function(url){ flashGlow(url); },
+    /* 运行时应用用户配置（来自客户端 configForms）。
+       host 侧不读 volatile 的 Config，所以用户配置只能由这里送进来。 */
+    configure:function(user){
+      try{
+        if(!user) return;
+        if(user.glowColor){
+          var rgb=parseRgb(user.glowColor);
+          if(el) el.style.setProperty('--bl-glow-rgb',rgb);
+        }
+        if(user.tintLight||user.tintDark){
+          var dark=isDark();
+          var tint=(dark?user.tintDark:user.tintLight)||(dark?CFG.tintDark:CFG.tintLight);
+          if(tint&&el) el.style.setProperty('--bl-tint',tint);
+        }
+        if(user.icon!==undefined||user.iconSize!==undefined){
+          if(user.icon!==undefined) CFG.icon=user.icon;
+          if(user.iconSize!==undefined) CFG.iconSize=user.iconSize;
+          renderIcon();
+        }
+        if(user.mode){
+          var frost=document.getElementById('__bl_frost');
+          if(frost){
+            if(user.mode==='realtime'){
+              var r=(user.blur===undefined?CFG.blur:user.blur);
+              frost.style.backdropFilter='blur('+r+'px) saturate(1.15)';
+              frost.style.webkitBackdropFilter='blur('+r+'px) saturate(1.15)';
+            }else{
+              frost.style.backdropFilter='none';
+              frost.style.webkitBackdropFilter='none';
+            }
+          }
+        }
+        if(worker&&(user.waveSpeed!==undefined||user.damping!==undefined||user.amplitude!==undefined)){
+          worker.postMessage({type:'tune',waveSpeed:user.waveSpeed,damping:user.damping,amplitude:user.amplitude});
+        }
+      }catch(e){}
+    },
     get done(){ return done; }
   };
   /* 让动态层知道静态层已经就位 */
@@ -1289,6 +1336,10 @@ self.onmessage=function(e){
   } else if(m.type==='resize'){
     VW=m.VW; VH=m.VH; dpr=m.dpr;
     if(cv){ cv.width=Math.round(VW*dpr); cv.height=Math.round(Math.min(BAND*2,VH)*dpr); }
+  } else if(m.type==='tune'){
+    if(m.waveSpeed!==undefined) C2=m.waveSpeed;
+    if(m.damping!==undefined) DAMP=m.damping;
+    if(m.amplitude!==undefined) CFG.amplitude=m.amplitude;
   } else if(m.type==='theme'){
     dark=m.dark;
   } else if(m.type==='pour'){
@@ -1311,7 +1362,10 @@ export function apply(ctx, config) {
   /* 用**非 volatile** 的 fields 校验：导出的 Config 里每个字段都带
      .volatile()，其输出是「稳定引用」包装（{ get() }），直接读会拿到
      包装对象而不是值。fields 才是拿普通配置值的那一份。 */
-  const cfg = Config(config ?? {});
+  /* host 不读用户配置：volatile 字段的值是客户端专属的稳定引用，
+     在这里读会让 dsh 的配置校验失败（实测 ValidationError: $.mode got {}），
+     插件随之不激活。用一个**独立的默认值实例**生成骨架即可。 */
+  const cfg = fields({});
 
   /* 设置页：dsh 按插件的 Config schema 自动生成表单
      （settings.describe() 读取「active plugin schemas and their live values」），
