@@ -3,17 +3,17 @@
 # Install with the official CLI; it reconciles dsh.profile.bundles for packages
 # that declare `dsh.bundle`, so this insert is registered automatically:
 #
-#   dsh plugin --profile web add betterloading
+#   dsh plugin --profile web add dsh-betterloading
 #
 # Per-deployment tuning (mode, blur, tint, wave physics) is deliberately NOT
 # baked in here. Override the config in your profile's own patch layer, which is
 # applied after every bundle layer and therefore wins:
 #
-#   - id: betterloading
+#   - id: betterloading   # 行 id 可以随意，配置覆盖按它匹配
 #     config:
-#       mode: realtime    # static (default) | realtime
+#       mode: realtime    # realtime (default) | static
 #       blur: 10
 #
 - insert:
     - id: betterloading
-      name: "betterloading"
+      name: "dsh-betterloading"

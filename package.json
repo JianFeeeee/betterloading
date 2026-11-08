@@ -1,7 +1,7 @@
 {
-  "name": "betterloading",
+  "name": "dsh-betterloading",
   "version": "0.1.0",
-  "description": "Frosted-glass pouring loader for the DeepSeek Harness (dsh) web UI: the water line rises with load progress, the frost recedes with it, and the page fades into clarity. Static-sample or real blur, configurable.",
+  "description": "Frosted-glass pouring loader for the DeepSeek Harness (dsh) web UI: the water line rises with real load progress, the frost recedes with it, and the page fades into clarity. Configurable real blur or sampled frost.",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -19,6 +19,7 @@
   "keywords": [
     "dsh",
     "dsh-plugin",
+    "dsh-bundle",
     "deepseek-harness",
     "deepseek",
     "harness",
@@ -26,9 +27,9 @@
     "loading-screen",
     "splash",
     "skeleton",
+    "progress",
     "frosted-glass",
     "glassmorphism",
-    "theme",
     "ui",
     "web-ui"
   ],
@@ -44,7 +45,7 @@
   "homepage": "https://github.com/JianFeeeee/betterloading#readme",
   "engines": {
     "node": ">=22.19.0",
-    "dsh": ">=0.2.0-rc.1"
+    "dsh": ">=0.2.0-rc.1 <0.3.0"
   },
   "dsh": {
     "bundle": {
@@ -53,5 +54,12 @@
   },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "^3.18.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

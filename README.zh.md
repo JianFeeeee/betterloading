@@ -21,7 +21,7 @@
 ## 安装
 
 ```bash
-dsh plugin --profile web add betterloading
+dsh plugin --profile web add dsh-betterloading
 ```
 
 CLI 会读取 `dsh.bundle` 声明并把它加入 `dsh.profile.bundles`，无需手工编辑 patch。
@@ -29,7 +29,7 @@ CLI 会读取 `dsh.bundle` 声明并把它加入 `dsh.profile.bundles`，无需�
 卸载：
 
 ```bash
-dsh plugin --profile web remove betterloading
+dsh plugin --profile web remove dsh-betterloading
 ```
 
 ## 两种磨砂模式（`mode`）

@@ -22,7 +22,7 @@ The most familiar slow-network scene: the shell UI has already rendered, but the
 ## Install
 
 ```bash
-dsh plugin --profile web add betterloading
+dsh plugin --profile web add dsh-betterloading
 ```
 
 The CLI reads the `dsh.bundle` declaration and registers it in `dsh.profile.bundles` — no manual patch editing.
@@ -30,7 +30,7 @@ The CLI reads the `dsh.bundle` declaration and registers it in `dsh.profile.bund
 Uninstall:
 
 ```bash
-dsh plugin --profile web remove betterloading
+dsh plugin --profile web remove dsh-betterloading
 ```
 
 ## Two frost modes (`mode`)
