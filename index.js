@@ -241,6 +241,16 @@ const HTML = `
  * @param cfg - 已校验的配置。
  * @returns 一段 JS 文本。
  */
+/**
+ * 生成注入的主线程脚本。
+ *
+ * 它本身很轻：只负责 DOM（铭牌、清单、泛光、磨砂层的裁剪）、加载事件监听，
+ * 以及把"落水"指令转发给 worker。波动方程与 canvas 绘制全在 worker 线程，
+ * 所以 dsh 的 JS 与动画不再争同一个事件循环。
+ *
+ * @param cfg - 已校验的配置。
+ * @returns 一段 JS 文本。
+ */
 function buildScript(cfg) {
   return `
 (function(){
@@ -252,7 +262,7 @@ function buildScript(cfg) {
       glowHost=document.getElementById('__bl_glows'),
       listEl=document.getElementById('__bl_list'),
       cv=document.getElementById('__bl_wave'),
-      cx=cv&&cv.getContext('2d',{alpha:true});
+      srcEl=document.getElementById('__bl_wsrc');
   var CFG=${js({
     mode: cfg.mode,
     noise: cfg.noise,
@@ -261,64 +271,78 @@ function buildScript(cfg) {
     damping: cfg.damping,
     amplitude: cfg.amplitude,
     idleTimeoutMs: cfg.idleTimeoutMs,
-    tintLight: cfg.tintLight,
-    tintDark: cfg.tintDark,
+    glowMax: cfg.glowMax,
   })};
 
-  /* 把 rgba()/#rrggbb 颜色转成 {r,g,b,a}，供 canvas 画融合渐变 */
-  function toRGBA(c){
-    c=String(c||'').trim();
-    var m=/^#([0-9a-f]{6})$/i.exec(c);
-    if(m){var h=m[1];return {r:parseInt(h.slice(0,2),16),g:parseInt(h.slice(2,4),16),b:parseInt(h.slice(4,6),16),a:1};}
-    m=/^#([0-9a-f]{3})$/i.exec(c);
-    if(m){var x=m[1];return {r:parseInt(x[0]+x[0],16),g:parseInt(x[1]+x[1],16),b:parseInt(x[2]+x[2],16),a:1};}
-    m=/^rgba?\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)(?:\\s*,\\s*([\\d.]+))?/i.exec(c);
-    if(m) return {r:+m[1],g:+m[2],b:+m[3],a:(m[4]===undefined?1:+m[4])};
-    return {r:250,g:252,b:255,a:.55};
-  }
-
   var mounted=false, done=false, removed=false, apiStarted=0, apiDone=0;
+  var worker=null, offscreen=false;
 
   function isDark(){ return !!(document.body&&document.body.hasAttribute('data-ds-dark-theme')); }
 
-  /* ===== 磨砂质感：realtime 用真实滤镜(CSS 已设)；static 一次性生成噪点 ===== */
+  /* ===== 静态磨砂质感（仅 static 模式）：一次性噪点纹理 ===== */
   if(CFG.mode==='static'&&frost){
     try{
-      var dark=isDark();
+      var dark0=isDark();
       var nc=document.createElement('canvas'); nc.width=nc.height=96;
       var nx=nc.getContext('2d');
       var im=nx.createImageData(96,96), d=im.data;
       var a=Math.max(0,Math.min(100,CFG.noise));
       for(var i=0;i<d.length;i+=4){
-        var v=(Math.random()*255)|0;
-        d[i]=d[i+1]=d[i+2]=v;
-        d[i+3]=(Math.random()*a)|0;
+        var vv=(Math.random()*255)|0;
+        d[i]=d[i+1]=d[i+2]=vv; d[i+3]=(Math.random()*a)|0;
       }
       nx.putImageData(im,0,0);
       frost.style.backgroundImage='url('+nc.toDataURL('image/png')+')';
     }catch(e){}
   }
 
-  function label(url){
+  /* ===== 动画 worker：OffscreenCanvas 交给它，波动与绘制不在主线程 ===== */
+  function startWorker(){
+    if(worker||!cv||!srcEl) return;
     try{
-      var p=new URL(url,location.href).pathname;
-      if(p.indexOf('/api/session')===0) return '会话';
-      if(p.indexOf('/api/workspace')===0) return '工作区';
-      if(p.indexOf('/api/settings')===0) return '设置';
-      if(p.indexOf('/api/job')===0) return '任务';
-      if(p.indexOf('/api/account')===0) return '账号';
-      if(p.indexOf('/api/terminal')===0) return '终端';
-      if(p.indexOf('/api/attachment')===0) return '附件';
-      return '内容';
-    }catch(e){ return '内容'; }
+      var off=cv.transferControlToOffscreen();
+      var blob=new Blob([srcEl.textContent],{type:'text/javascript'});
+      worker=new Worker(URL.createObjectURL(blob));
+      worker.onmessage=function(ev){
+        var m=ev.data||{};
+        if(m.type!=='state') return;
+        /* 主线程只做低频 DOM 写入 */
+        if(frost){
+          var fh=Math.max(0,Math.min(window.innerHeight,Math.ceil(m.top)+Math.min(220,window.innerHeight)));
+          frost.style.height=fh+'px';
+          if(m.clip) frost.style.clipPath="path('"+m.clip+"')";
+        }
+        cv.style.top=m.top+'px';
+        cv.style.height=Math.min(220,window.innerHeight)+'px';
+        var st=Math.round(m.level*100);
+        if(st!==lastPct){ lastPct=st; pct.textContent=st+'%'; }
+      };
+      worker.postMessage({
+        type:'init', canvas:off, VW:window.innerWidth, VH:window.innerHeight,
+        dpr:Math.min(2,window.devicePixelRatio||1), dark:isDark(), cfg:CFG
+      },[off]);
+      offscreen=true;
+    }catch(e){ worker=null; }
+  }
+  var lastPct=-1;
+  startWorker();
+
+  function pour(vol,fall,pos){
+    if(done||!worker) return;
+    worker.postMessage({type:'pour',vol:vol,fall:fall,pos:pos});
   }
 
-  /* ===== 加载高亮框池 =====
-     每个并发加载各自一个框：之前复用单个元素会让并发请求互相覆盖位置，
-     看上去永远只有一个框。这里做一个上限 GLOW_MAX 的池，
-     取空闲元素、定位、点亮、到时归还。
-     注：不是精确到 DOM 元素（静态资源与 /api 都不带布局信息），
-     而是「这个端点影响的那块区域」——侧栏/主区/模态区。 */
+  window.addEventListener('resize',function(){
+    if(worker) worker.postMessage({type:'resize',VW:window.innerWidth,VH:window.innerHeight,
+      dpr:Math.min(2,window.devicePixelRatio||1)});
+  });
+  try{
+    new MutationObserver(function(){
+      if(worker) worker.postMessage({type:'theme',dark:isDark()});
+    }).observe(document.body,{attributes:true,attributeFilter:['data-ds-dark-theme']});
+  }catch(e){}
+
+  /* ===== 加载高亮框池 ===== */
   var GLOW_MAX=CFG.glowMax||6, glowPool=[], glowBusy=[];
   (function buildPool(){
     if(!glowHost) return;
@@ -332,12 +356,9 @@ function buildScript(cfg) {
   function regionRect(url){
     var W=window.innerWidth, H=window.innerHeight, p='';
     try{ p=new URL(url,location.href).pathname; }catch(e){}
-    if(/^\\/api\\/(session|workspace|attachment)/.test(p))
-      return {x:0,y:H*0.10,w:W*0.22,h:H*0.82};
-    if(/^\\/api\\/(settings|account)/.test(p))
-      return {x:W*0.28,y:H*0.20,w:W*0.44,h:H*0.54};
-    if(/^\\/api\\/(terminal|job)/.test(p))
-      return {x:W*0.22,y:H*0.10,w:W*0.56,h:H*0.82};
+    if(/^\\/api\\/(session|workspace|attachment)/.test(p)) return {x:0,y:H*0.10,w:W*0.22,h:H*0.82};
+    if(/^\\/api\\/(settings|account)/.test(p)) return {x:W*0.28,y:H*0.20,w:W*0.44,h:H*0.54};
+    if(/^\\/api\\/(terminal|job)/.test(p)) return {x:W*0.22,y:H*0.10,w:W*0.56,h:H*0.82};
     return {x:W*0.22,y:H*0.10,w:W*0.78,h:H*0.82};
   }
   function lightGlow(item){
@@ -354,14 +375,12 @@ function buildScript(cfg) {
     if(!glowPool.length&&!glowBusy.length) return;
     if(done) return;
     var r=regionRect(url), i;
-    /* 同一区域已经在亮 → 只重新提亮，不叠加 */
     for(i=0;i<glowBusy.length;i++){
       var b=glowBusy[i];
       if(Math.abs(b.x-r.x)<2&&Math.abs(b.y-r.y)<2&&Math.abs(b.w-r.w)<2){ lightGlow(b); return; }
     }
     var el=glowPool.shift();
     if(!el) return;
-    /* 只用合成友好的属性：尺寸一次性写，位置走 translate3d */
     el.style.width=r.w+'px'; el.style.height=r.h+'px';
     el.style.transform='translate3d('+r.x+'px,'+r.y+'px,0)';
     var item={el:el,x:r.x,y:r.y,w:r.w};
@@ -369,17 +388,15 @@ function buildScript(cfg) {
     lightGlow(item);
   }
 
-  /* ===== 铭牌里的加载清单（最多 3 条，只在事件发生时更新 DOM） ===== */
-  var rows=[], seq=0, raf2=0;
+  /* ===== 铭牌清单 ===== */
+  var rows=[], seq=0;
   function shortName(url){
     var s=String(url||'');
-    try{
-      if(s.indexOf('://')>0) s=new URL(s).pathname;   // 完整 URL 只取 pathname
-    }catch(e){}
+    try{ if(s.indexOf('://')>0) s=new URL(s).pathname; }catch(e){}
     var q=s.indexOf('?'); if(q>0) s=s.slice(0,q);
     var seg=s.split('/').filter(function(x){return x;});
     var n=seg.length?seg[seg.length-1]:s;
-    if(seg.length>1) n=seg[seg.length-2]+'/'+n;       // 保留一段父目录便于区分
+    if(seg.length>1) n=seg[seg.length-2]+'/'+n;
     if(n.length>24) n='…'+n.slice(-23);
     return n;
   }
@@ -399,8 +416,7 @@ function buildScript(cfg) {
     var id=++seq;
     rows.unshift({id:id,name:name,done:false,ms:0,t0:performance.now()});
     if(rows.length>3) rows=rows.slice(0,3);
-    renderList();
-    return id;
+    renderList(); return id;
   }
   function finishRow(id){
     for(var i=0;i<rows.length;i++){
@@ -412,208 +428,21 @@ function buildScript(cfg) {
     }
   }
 
-  /* ===== 水团：落点随机，体积封顶，超出进队列 ===== */
-  var blobs=[], queue=[], committed=0, settled=0;
-  var MAX_BLOB=CFG.maxBlob;
-
-  function pour(vol,fallMs,pos){
-    if(done) return;
-    vol=Math.max(0,Math.min(vol,MAX_BLOB,0.9999-committed));
-    if(vol<=0.0005) return;
-    var px=(pos===undefined)?(0.18+0.64*Math.random()):pos;
-    if(blobs.length>=8||queue.length>0){
-      if(queue.length<64){ committed+=vol; queue.push({vol:vol,fall:fallMs,pos:px}); }
-      return;
-    }
-    committed+=vol; blobs.push(makeBlob(vol,fallMs,px));
-  }
-  function makeBlob(vol,fallMs,pos){
-    return {t0:performance.now(),
-      fall:fallMs||(170+Math.random()*180),
-      dur:480+Math.random()*420+vol*1200,
-      vol:vol,pos:pos,landed:false};
-  }
-  function drainQueue(){
-    while(queue.length>0&&blobs.length<8){ var x=queue.shift(); blobs.push(makeBlob(x.vol,x.fall,x.pos)); }
-  }
-  function smooth(x){ x=x<0?0:(x>1?1:x); return x*x*(3-2*x); }
-  function levelAt(now){
-    drainQueue();
-    var lv=settled;
-    for(var i=blobs.length-1;i>=0;i--){
-      var b=blobs[i];
-      if(now-b.t0<b.fall) continue;
-      var p=(now-b.t0-b.fall)/b.dur;
-      if(p>=1){ settled+=b.vol; blobs.splice(i,1); continue; }
-      lv+=b.vol*smooth(p);
-    }
-    return Math.max(0,Math.min(1,lv));
+  function label(url){
+    try{
+      var p=new URL(url,location.href).pathname;
+      if(p.indexOf('/api/session')===0) return '会话';
+      if(p.indexOf('/api/workspace')===0) return '工作区';
+      if(p.indexOf('/api/settings')===0) return '设置';
+      if(p.indexOf('/api/job')===0) return '任务';
+      if(p.indexOf('/api/account')===0) return '账号';
+      if(p.indexOf('/api/terminal')===0) return '终端';
+      if(p.indexOf('/api/attachment')===0) return '附件';
+      return '内容';
+    }catch(e){ return '内容'; }
   }
 
-  /* ===== 一维阻尼波动方程 ===== */
-  var N=96, u=new Float32Array(N), v=new Float32Array(N), acc=new Float32Array(N);
-  var C2=CFG.waveSpeed, DAMP=CFG.damping, amp=1.0, simLast=performance.now();
-
-  /* 零和冲量核（墨西哥帽）：中心下压、两侧上抬，权重和为 0。
-     非零和会让每次落水都单向推整条水面，累积后与去均值形成对抗 → 液面抽搐。 */
-  var JW=[];
-  (function(){
-    var s=0,i,d;
-    for(d=-5;d<=5;d++){ var w=Math.exp(-d*d/4.0); JW.push(w); s+=w; }
-    var avg=s/JW.length;
-    for(i=0;i<JW.length;i++) JW[i]=(JW[i]-avg)/0.72;
-  })();
-  function jolt(pos,force){
-    var k=Math.max(5,Math.min(N-6,Math.round(pos*N)));
-    for(var d=-5;d<=5;d++) v[k+d]-=force*JW[d+5];
-  }
-  function activeBlobs(now){
-    var a=0,w=0;
-    for(var i=0;i<blobs.length;i++){
-      var b=blobs[i],t=now-b.t0-b.fall;
-      if(t<0||t>b.dur) continue;
-      a++; if(b.vol>w) w=b.vol;
-    }
-    return {count:a,vol:w};
-  }
-  function consumeLanded(now){
-    for(var i=0;i<blobs.length;i++){
-      var b=blobs[i];
-      if(!b.landed&&now-b.t0>=b.fall){ b.landed=true; jolt(b.pos,3.2+b.vol*16.0); }
-    }
-  }
-  /* 位置与速度都要去均值：只清位置会让速度的单向分量持续推水面 → 抽搐 */
-  function removeMean(){
-    var mu=0,mv=0,i;
-    for(i=0;i<N;i++){ mu+=u[i]; mv+=v[i]; }
-    mu/=N; mv/=N;
-    if(Math.abs(mu)>1e-6) for(i=0;i<N;i++) u[i]-=mu;
-    if(Math.abs(mv)>1e-6) for(i=0;i<N;i++) v[i]-=mv*0.55;
-  }
-  var nextStir=0;
-  function step(now){
-    var dt=Math.min(0.033,(now-simLast)/1000); simLast=now;
-    consumeLanded(now);
-    var act=activeBlobs(now);
-    if(!done&&act.count>0&&now>=nextStir){
-      nextStir=now+70+Math.random()*150;
-      var pos=0.15+0.70*Math.random();
-      var f=(Math.random()<0.5?1:-1)*(0.9+act.vol*5.5);
-      jolt(pos,f);
-    }
-    if(done) amp*=Math.pow(0.955,dt*60);
-    var h=1/60, steps=Math.min(2,Math.max(1,Math.round(dt/h)));
-    for(var s=0;s<steps;s++){
-      for(var i=1;i<N-1;i++) acc[i]=C2*(u[i-1]+u[i+1]-2*u[i])-DAMP*v[i];
-      acc[0]=C2*(u[1]-u[0])-DAMP*v[0];
-      acc[N-1]=C2*(u[N-2]-u[N-1])-DAMP*v[N-1];
-      for(var j=0;j<N;j++){ v[j]+=acc[j]*h; u[j]+=v[j]*h; }
-    }
-    removeMean();
-  }
-
-  /* ===== 分层绘制 =====
-     上方 [0, base-band)  → 静态模糊区（frost），矩形裁剪，不重绘
-     中间 [base-band, base+band] → 每帧重绘窄带（float canvas）
-     下方 (base+band, VH]  → 完全透明，不画任何东西 */
-  var VW=0,VH=0,dpr=1,curLevel=0,prevLevel=0,lastPct=-1,lastLay=-1,curTop=0,lastDraw=0;
-  var BAND=110, INTRUDE=0, OVL=56;                                  // 以水面线为中心上下的重绘半宽
-  function resize(){
-    dpr=Math.min(2,window.devicePixelRatio||1);
-    VW=el.clientWidth||window.innerWidth;
-    VH=el.clientHeight||window.innerHeight;
-    var h=Math.min(BAND*2,VH);
-    if(cv.width!==Math.round(VW*dpr)||cv.height!==Math.round(h*dpr)){
-      cv.width=Math.round(VW*dpr); cv.height=Math.round(h*dpr);
-    }
-  }
-  /* 二次贝塞尔穿过采样点中点：消除折线的「一格一格」感 */
-  function trace(ys,off){
-    cx.beginPath(); cx.moveTo(0,ys[0]+off);
-    for(var i=0;i<N-1;i++){
-      var x0=i/(N-1)*VW, x1=(i+1)/(N-1)*VW;
-      cx.quadraticCurveTo(x0,ys[i]+off,(x0+x1)/2,(ys[i]+ys[i+1])/2+off);
-    }
-    cx.lineTo(VW,ys[N-1]+off);
-  }
-  function baseYFor(lv){
-    var b=VH*(1-lv);
-    var lt=Math.min(1,lv/0.12); lt=lt*lt*(3-2*lt);
-    return b-(1-lt)*26;
-  }
-  /* 摆位：窄带跟随水面，静态模糊区只到窄带顶部。
-     只有整数像素变化超过阈值才写样式，避免每帧 layout。 */
-  function layout(base){
-    var top=Math.round(base-BAND);
-    if(top<0) top=0;
-    if(top>VH-BAND*2) top=Math.max(0,VH-BAND*2);
-    if(Math.abs(top-curTop)>0){
-      curTop=top;
-      cv.style.top=top+'px';
-      cv.style.height=Math.min(BAND*2,VH)+'px';
-      frost.style.height=Math.min(VH,top+BAND*2)+'px';
-    }
-    return top;
-  }
-  /* 窄带模糊层的裁剪：下边界就是水波曲线。
-     注意 ys 已经是**画布局部坐标**（draw 内已减 top），这里不再减。 */
-  var lastClip=0;
-  function updateBandClip(now,ys){
-    if(now-lastClip<100) return; lastClip=now;   // 10Hz：clip 变化触发整层重模糊
-    /* ys 已是画布局部坐标（相对窄带顶），B 层也定位在窄带顶 → 直接用 */
-    /* ys 是画布局部坐标，frost 从视口 0 起 → 加回 curTop */
-    var d='M 0 0 H '+VW.toFixed(0)+' V '+(ys[N-1]+curTop).toFixed(1);
-    for(var i=N-1;i>=0;i-=3) d+=' L '+(i/(N-1)*VW).toFixed(1)+' '+(ys[i]+curTop).toFixed(1);
-    d+=' L 0 '+(ys[0]+curTop).toFixed(1)+' Z';
-    frost.style.clipPath="path('"+d+"')";
-  }
-  function draw(base,top){
-    if(!cx) return null;
-    var dark=isDark();
-    var h=Math.min(BAND*2,VH);
-    cx.setTransform(dpr,0,0,dpr,0,0);
-    cx.clearRect(0,0,VW,h);
-    var ly=base-top;                               // 水面在画布内的 y
-    var ys=new Float32Array(N), i;
-    for(i=0;i<N;i++) ys[i]=ly+34*Math.tanh(u[i]*CFG.amplitude*amp/34);
-    /* 1) 水下折射光带 */
-    var g=cx.createLinearGradient(0,ly,0,Math.min(h,ly+70));
-    g.addColorStop(0,dark?'rgba(150,195,255,.14)':'rgba(120,160,225,.12)');
-    g.addColorStop(1,'rgba(120,160,225,0)');
-    trace(ys,0); cx.lineTo(VW,Math.min(h,ly+70)); cx.lineTo(0,Math.min(h,ly+70)); cx.closePath();
-    cx.fillStyle=g; cx.fill();
-    /* 3) 弯月面：暗边在上、亮边在下 */
-    trace(ys,-1.6);
-    cx.strokeStyle=dark?'rgba(0,0,0,.5)':'rgba(60,84,130,.42)'; cx.lineWidth=2; cx.stroke();
-    trace(ys,1.1);
-    cx.strokeStyle=dark?'rgba(205,230,255,.9)':'rgba(255,255,255,.98)'; cx.lineWidth=2; cx.stroke();
-    return ys;
-  }
-
-  var raf=0;
-  function frame(now){
-    if(removed) return;
-    curLevel=levelAt(now);
-    /* 水位单调：blob 在 active/settled 之间转移时不得倒退 */
-    if(curLevel<prevLevel) curLevel=prevLevel; else prevLevel=curLevel;
-    var st=Math.round(curLevel*100);
-    if(st!==lastPct){ lastPct=st; pct.textContent=st+'%'; }
-    step(now);
-    /* 加载期 CPU 被 dsh 自身启动占满，水波不需要 60Hz：
-       canvas 30Hz、clip 10Hz，把每帧重绘/重模糊的开销减半以上。 */
-    if(now-lastDraw>=33){
-      lastDraw=now;
-      resize();
-      var base=baseYFor(curLevel);
-      var top=layout(base);
-      var ys=draw(base,top);
-      if(ys) updateBandClip(now,ys);
-    }
-    raf=requestAnimationFrame(frame);
-  }
-  raf=requestAnimationFrame(frame);
-
-  /* ===== 加载事件 → 落下一团水 ===== */
+  /* ===== 加载事件 → 落一团水 ===== */
   var expected=document.querySelectorAll('script[src],link[rel=stylesheet],link[rel=modulepreload]').length||4;
   var seen={};
   function checkResources(){
@@ -629,7 +458,7 @@ function buildScript(cfg) {
       pour(0.018,150+i*40);
       pushRow('资源 · '+shortName(list[i]&&list[i].name));
     }
-    if(fresh>0) flashGlow('/api/');            // 资源阶段高亮主区域
+    if(fresh>0) flashGlow('/api/');
     detail.textContent='资源 '+Math.min(n,expected)+' / '+expected;
     status.textContent=n<expected?'正在下载界面资源…':'资源就绪，正在启动…';
   }
@@ -676,13 +505,13 @@ function buildScript(cfg) {
   function finish(reason){
     if(done) return;
     clearInterval(resTimer); clearInterval(apiTimer);
-    var need=0.9999-committed, z=0;
-    while(z<24&&need>0){ pour(Math.min(MAX_BLOB,need),120+z*55); need-=MAX_BLOB; z++; }
+    if(worker) worker.postMessage({type:'finish'});
     done=true;
     status.textContent='已就绪'; detail.textContent=reason||'';
     el.classList.add('__done');
     setTimeout(function(){
-      removed=true; cancelAnimationFrame(raf);
+      removed=true;
+      if(worker){ worker.terminate(); worker=null; }
       if(el&&el.parentNode) el.parentNode.removeChild(el);
     },1500);
     window.fetch=origFetch;
@@ -709,6 +538,178 @@ function buildScript(cfg) {
 }
 
 /**
+ * worker 源码（以 `text/js-worker` 内联在页面里，主线程用 Blob 加载）。
+ * 用内联而不是拼接字符串，避免模板字面量转义把正则/反斜杠吃掉。
+ */
+const WORKER_SRC = `
+/* betterloading 动画 worker：波动方程 + OffscreenCanvas 绘制全部在这里，
+   与 dsh 的 JS 不在同一个事件循环，主线程只剩低频 DOM 更新。 */
+var VW=0,VH=0,dpr=1,dark=false,CFG=null,cx=null,cv=null,ready=false;
+var N=96,u=new Float32Array(N),v=new Float32Array(N),acc=new Float32Array(N);
+var C2=200,DAMP=0.35,amp=1.0,simLast=0,BAND=110;
+var blobs=[],queue=[],committed=0,settled=0,MAX_BLOB=0.04,done=false,finishing=false;
+var curLevel=0,prevLevel=0,lastEmit=0,lastFrame=0,nextStir=0;
+var JW=[];
+
+(function(){
+  var sum=0,d,i;
+  for(d=-5;d<=5;d++){ var w=Math.exp(-d*d/4.0); JW.push(w); sum+=w; }
+  var avg=sum/JW.length;
+  for(i=0;i<JW.length;i++) JW[i]=(JW[i]-avg)/0.72;
+})();
+
+function now(){ return (self.performance&&performance.now)?performance.now():Date.now(); }
+function smooth(x){ x=x<0?0:(x>1?1:x); return x*x*(3-2*x); }
+
+function makeBlob(vol,fall,pos){
+  return {t0:now(),fall:fall||(170+Math.random()*180),
+    dur:480+Math.random()*420+vol*1200,vol:vol,pos:pos,landed:false};
+}
+function pourImpl(vol,fallMs,pos){
+  if(done) return;
+  vol=Math.max(0,Math.min(vol,MAX_BLOB,0.9999-committed));
+  if(vol<=0.0005) return;
+  var px=(pos===undefined)?(0.18+0.64*Math.random()):pos;
+  if(blobs.length>=8||queue.length>0){
+    if(queue.length<64){ committed+=vol; queue.push({vol:vol,fall:fallMs,pos:px}); }
+    return;
+  }
+  committed+=vol; blobs.push(makeBlob(vol,fallMs,px));
+}
+function drainQueue(){
+  while(queue.length>0&&blobs.length<8){ var x=queue.shift(); blobs.push(makeBlob(x.vol,x.fall,x.pos)); }
+}
+function levelAt(t){
+  drainQueue();
+  var lv=settled;
+  for(var i=blobs.length-1;i>=0;i--){
+    var b=blobs[i];
+    if(t-b.t0<b.fall) continue;
+    var p=(t-b.t0-b.fall)/b.dur;
+    if(p>=1){ settled+=b.vol; blobs.splice(i,1); continue; }
+    lv+=b.vol*smooth(p);
+  }
+  return Math.max(0,Math.min(1,lv));
+}
+function jolt(pos,force){
+  var k=Math.max(5,Math.min(N-6,Math.round(pos*N)));
+  for(var d=-5;d<=5;d++) v[k+d]-=force*JW[d+5];
+}
+function activeBlobs(t){
+  var a=0,w=0;
+  for(var i=0;i<blobs.length;i++){
+    var b=blobs[i],dt=t-b.t0-b.fall;
+    if(dt<0||dt>b.dur) continue;
+    a++; if(b.vol>w) w=b.vol;
+  }
+  return {count:a,vol:w};
+}
+function consumeLanded(t){
+  for(var i=0;i<blobs.length;i++){
+    var b=blobs[i];
+    if(!b.landed&&t-b.t0>=b.fall){ b.landed=true; jolt(b.pos,3.2+b.vol*16.0); }
+  }
+}
+function removeMean(){
+  var mu=0,mv=0,i;
+  for(i=0;i<N;i++){ mu+=u[i]; mv+=v[i]; }
+  mu/=N; mv/=N;
+  if(Math.abs(mu)>1e-6) for(i=0;i<N;i++) u[i]-=mu;
+  if(Math.abs(mv)>1e-6) for(i=0;i<N;i++) v[i]-=mv*0.55;
+}
+function stepSim(t){
+  var dt=Math.min(0.033,(t-simLast)/1000); simLast=t;
+  consumeLanded(t);
+  var act=activeBlobs(t);
+  if(!done&&act.count>0&&t>=nextStir){
+    nextStir=t+70+Math.random()*150;
+    jolt(0.15+0.70*Math.random(),(Math.random()<0.5?1:-1)*(0.9+act.vol*5.5));
+  }
+  if(done) amp*=Math.pow(0.955,dt*60);
+  var h=1/60,steps=Math.min(2,Math.max(1,Math.round(dt/h)));
+  for(var sp=0;sp<steps;sp++){
+    for(var i=1;i<N-1;i++) acc[i]=C2*(u[i-1]+u[i+1]-2*u[i])-DAMP*v[i];
+    acc[0]=C2*(u[1]-u[0])-DAMP*v[0];
+    acc[N-1]=C2*(u[N-2]-u[N-1])-DAMP*v[N-1];
+    for(var j=0;j<N;j++){ v[j]+=acc[j]*h; u[j]+=v[j]*h; }
+  }
+  removeMean();
+}
+function baseYFor(lv){
+  var b=VH*(1-lv);
+  var lt=Math.min(1,lv/0.12); lt=lt*lt*(3-2*lt);
+  return b-(1-lt)*26;
+}
+function trace(ys,off){
+  cx.beginPath(); cx.moveTo(0,ys[0]+off);
+  for(var i=0;i<N-1;i++){
+    var x0=i/(N-1)*VW, x1=(i+1)/(N-1)*VW;
+    cx.quadraticCurveTo(x0,ys[i]+off,(x0+x1)/2,(ys[i]+ys[i+1])/2+off);
+  }
+  cx.lineTo(VW,ys[N-1]+off);
+}
+function frame(){
+  if(!ready||done&&curLevel>0.999){ return; }
+  var t=now();
+  if(t-lastFrame<30){ setTimeout(frame,10); return; }   /* ~30Hz 绘制 */
+  lastFrame=t;
+  curLevel=levelAt(t);
+  if(curLevel<prevLevel) curLevel=prevLevel; else prevLevel=curLevel;
+  stepSim(t);
+  /* 绘制窄带：水面在画布内的 y */
+  var base=baseYFor(curLevel);
+  var top=Math.max(0,Math.min(VH-BAND*2,Math.round(base-BAND)));
+  var h=Math.min(BAND*2,VH);
+  cx.setTransform(dpr,0,0,dpr,0,0);
+  cx.clearRect(0,0,VW,h);
+  var ly=base-top, ys=new Float32Array(N), i;
+  for(i=0;i<N;i++) ys[i]=ly+34*Math.tanh(u[i]*CFG.amplitude*amp/34);
+  var g=cx.createLinearGradient(0,ly,0,Math.min(h,ly+70));
+  g.addColorStop(0,dark?'rgba(150,195,255,.14)':'rgba(120,160,225,.12)');
+  g.addColorStop(1,'rgba(120,160,225,0)');
+  trace(ys,0); cx.lineTo(VW,Math.min(h,ly+70)); cx.lineTo(0,Math.min(h,ly+70)); cx.closePath();
+  cx.fillStyle=g; cx.fill();
+  trace(ys,-1.6);
+  cx.strokeStyle=dark?'rgba(0,0,0,.5)':'rgba(60,84,130,.42)'; cx.lineWidth=2; cx.stroke();
+  trace(ys,1.1);
+  cx.strokeStyle=dark?'rgba(205,230,255,.9)':'rgba(255,255,255,.98)'; cx.lineWidth=2; cx.stroke();
+  /* 每 100ms 把水位 + 裁剪路径交给主线程（DOM 只能在那边改） */
+  if(t-lastEmit>=100){
+    lastEmit=t;
+    var d='M 0 0 H '+VW.toFixed(0)+' V '+(ys[N-1]+top).toFixed(1);
+    for(var k=N-1;k>=0;k-=3) d+=' L '+(k/(N-1)*VW).toFixed(1)+' '+(ys[k]+top).toFixed(1);
+    d+=' L 0 '+(ys[0]+top).toFixed(1)+' Z';
+    self.postMessage({type:'state',level:curLevel,top:top,clip:d});
+  }
+  setTimeout(frame,10);
+}
+
+self.onmessage=function(e){
+  var m=e.data||{};
+  if(m.type==='init'){
+    cv=m.canvas; cx=cv.getContext('2d',{alpha:true});
+    VW=m.VW; VH=m.VH; dpr=m.dpr; dark=m.dark;
+    CFG=m.cfg; C2=CFG.waveSpeed||200; DAMP=CFG.damping||0.35; MAX_BLOB=CFG.maxBlob||0.04;
+    cv.width=Math.round(VW*dpr); cv.height=Math.round(Math.min(BAND*2,VH)*dpr);
+    ready=true; simLast=now(); prevLevel=0; curLevel=0;
+    setTimeout(frame,0);
+  } else if(m.type==='resize'){
+    VW=m.VW; VH=m.VH; dpr=m.dpr;
+    if(cv){ cv.width=Math.round(VW*dpr); cv.height=Math.round(Math.min(BAND*2,VH)*dpr); }
+  } else if(m.type==='theme'){
+    dark=m.dark;
+  } else if(m.type==='pour'){
+    pourImpl(m.vol,m.fall,m.pos);
+  } else if(m.type==='finish'){
+    if(done) return;
+    var need=0.9999-committed,z=0;
+    while(z<24&&need>0){ pourImpl(Math.min(MAX_BLOB,need),120+z*55); need-=MAX_BLOB; z++; }
+    done=true;
+  }
+};
+`;
+
+/**
  * 注册 index 注入行。
  * @param ctx - Cordis 上下文。
  * @param config - 已校验的 {@link Config}。
@@ -720,6 +721,10 @@ export function apply(ctx, config) {
   ctx.inject(["webServer"], (webCtx) => {
     return webCtx.on("webserver/index-inject", (table) => {
       table.push({ kind: "style", text: style });
+      /* 顺序很重要：注入行按 table 顺序插到 <body> 开头，主线程脚本必须先能读到
+         worker 源码，否则拿到的 __bl_wsrc 是 null，worker 不会启动。 */
+      table.push({ kind: "html", placement: "body",
+        html: `<script type="text/js-worker" id="__bl_wsrc">${WORKER_SRC}</script>` });
       table.push({ kind: "html", placement: "body", html: HTML });
       table.push({ kind: "script", placement: "body", text: script });
     });
