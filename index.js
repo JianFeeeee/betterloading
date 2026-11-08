@@ -368,6 +368,30 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
   #__bl_text.__bump{animation:none}}
 
 /* 窄屏：收窄铭牌、缩小字号、上移一点避免和底部输入框挤在一起 */
+/* ---------------------------------------------------------------
+ * 首帧静态波：客户端 bundle 执行前，用纯 CSS 画一层水面。
+ * 外网慢链路下这段时间可能十几秒 —— 空白磨砂是不可接受的。
+ * canvas 接管后（#__bl.__bl_live）这层淡出，真波接上。
+ * ------------------------------------------------------------- */
+#__bl_bootwave{position:absolute;left:0;right:0;bottom:0;height:21%;overflow:hidden;
+  pointer-events:none;transition:opacity .45s ease}
+#__bl_bootwave::before,#__bl_bootwave::after{
+  content:"";position:absolute;left:-22%;width:144%;height:54px;top:-27px;
+  background:rgba(110,170,255,.17);border-radius:44%;will-change:transform}
+#__bl_bootwave::before{animation:__bl_sway 7.4s ease-in-out infinite}
+#__bl_bootwave::after{top:-34px;opacity:.55;animation:__bl_sway 5.6s ease-in-out infinite reverse}
+#__bl_bootwave>i{position:absolute;inset:0;display:block;
+  background:linear-gradient(180deg,rgba(110,170,255,.10),rgba(110,170,255,.02))}
+body[data-ds-dark-theme] #__bl_bootwave::before,
+body[data-ds-dark-theme] #__bl_bootwave::after{background:rgba(96,150,235,.22)}
+@keyframes __bl_sway{0%,100%{transform:translateX(-5%)}50%{transform:translateX(5%)}}
+#__bl.__bl_live #__bl_bootwave{opacity:0}
+#__bl.__bl_live #__bl_bootwave::before,
+#__bl.__bl_live #__bl_bootwave::after{animation:none}
+@media (prefers-reduced-motion:reduce){
+  #__bl_bootwave::before,#__bl_bootwave::after{animation:none}
+}
+
 @media (max-width:520px){
   #__bl_text{min-width:0;width:min(88vw,320px);padding:15px 16px 13px;top:26%}
   #__bl_iconwrap{margin-bottom:10px}
@@ -402,6 +426,7 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
 
 const HTML = `
 <div id="__bl" role="status" aria-live="polite">
+  <div id="__bl_bootwave" aria-hidden="true"><i></i></div>
   <div id="__bl_frost"></div>
   <canvas id="__bl_wave"></canvas>
   <div id="__bl_glows"></div>
@@ -539,6 +564,7 @@ function buildScript(cfg) {
   }
 
   /* ===== 动画 worker：OffscreenCanvas 交给它，波动与绘制不在主线程 ===== */
+  var liveSeen=false;
   function startWorker(){
     if(worker||!cv||!srcEl) return;
     try{
@@ -553,6 +579,9 @@ function buildScript(cfg) {
           return;
         }
         if(m.type!=='state') return;
+        /* worker 画出第一帧 = 真波已经在了：让纯 CSS 假波退场，
+           避免「上下两层水面」同时存在。 */
+        if(!liveSeen){ liveSeen=true; if(el) el.classList.add('__bl_live'); }
         /* 主线程只做低频 DOM 写入 */
         if(frost){
           var fh=Math.max(0,Math.min(window.innerHeight,Math.ceil(m.top)+Math.min(220,window.innerHeight)));
@@ -1154,6 +1183,9 @@ function buildScript(cfg) {
       if(takenOver) return;
       takenOver=true;
       if(visualTimer){ clearInterval(visualTimer); visualTimer=null; }
+      /* canvas 真波已经接上：让纯 CSS 假波退场，避免两层波叠加。 */
+      var bw=document.getElementById('__bl_bootwave');
+      if(bw&&el) el.classList.add('__bl_live');
     },
     /* 动态层按真实事件注水（会话/API），走 deep 阶段预算 */
     deep:function(fraction){ pay('deep',fraction); },
