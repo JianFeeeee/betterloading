@@ -264,6 +264,26 @@ for (const { name, cfg } of cases) {
   }
 }
 
+/* 模糊只能来自 #__bl_frost 的 backdrop-filter，且必须带 clip-path 跟随水面。
+   设计要求：水面上方模糊、下方透明。 */
+{
+  const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  if (!src.includes("backdrop-filter:blur(") || !src.includes("-webkit-backdrop-filter:blur(")) {
+    failed += 1;
+    console.error("✗ index.js: realtime 缺少 backdrop-filter（水面上方不会模糊）");
+  }
+  /* 唯一模糊层不加遮罩色的话，模糊会「发灰」而不是毛玻璃 */
+  if (!/#__bl_frost\{[\s\S]{0,400}?background-color:var\(--bl-tint\)/.test(src)) {
+    failed += 1;
+    console.error("✗ index.js: #__bl_frost 缺少底色（模糊层会发灰）");
+  }
+  /* 下边界必须由水面曲线裁剪，而不是一条水平线 */
+  if (!src.includes("frost.style.clipPath")) {
+    failed += 1;
+    console.error("✗ index.js: 模糊层没有跟随水面曲线（会是一条直线）");
+  }
+}
+
 /* 收工路径必须完整：曾经把 finish() 删掉却留着调用点，
    结果退出回调抛 ReferenceError、遮罩永不消失。 */
 {

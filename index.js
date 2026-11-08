@@ -43,7 +43,7 @@ const fields = z.object({
    */
   enabled: z.boolean().default(true),
 
-  mode: MODE.default("static"),
+  mode: MODE.default("realtime"),
 
   /** `realtime` 模式的模糊半径（px）。半径越大越贵。 */
   blur: z.natural().min(0).max(60).default(8),

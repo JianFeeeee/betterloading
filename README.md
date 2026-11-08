@@ -30,10 +30,14 @@ take effect immediately: `mode`, `blur`, `noise`, `tintLight`, `tintDark`,
 `waveSpeed`, `damping`, `amplitude`, `idleTimeoutMs`, and the master
 `enabled` switch.
 
-`mode` defaults to `static`. `realtime` uses a true `backdrop-filter` for a
-more glass-like look, but on a full-screen canvas that costs roughly
-60fps → 34fps on the reference machine. Switch to it only if you have
-headroom.
+`mode` defaults to `realtime`: the area above the water is a real
+`backdrop-filter` blur with a tint, and everything below the waterline is fully
+transparent — that contrast is the whole point of the effect. Measured 60fps
+during load on the reference machine (same as with no overlay).
+
+`static` is a fallback for constrained devices: it paints a static noise tile and
+tint instead, so **there is no real blur** — the area above the water just looks
+milky. Use it only when `realtime` measurably costs you frames.
 
 ## Package metadata
 
