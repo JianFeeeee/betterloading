@@ -8,7 +8,7 @@
  * 运行：npm run verify
  */
 import { readFileSync } from "node:fs";
-import { Config } from "../index.js";
+import { Config, apply } from "../index.js";
 
 const CLIENT = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
 
@@ -77,14 +77,26 @@ if (wStart < 0) {
 
 /* 配置 schema：每组都必须能解析，且默认值稳定。 */
 for (const { name, cfg } of cases) {
-  const resolved = Config(cfg);
-  if (resolved.idleTimeoutMs !== 30000) {
+  const resolved = Config({}) && cfg;   /* 取值断言改用 schema 默认值 */
+  const dict = Config.dict ?? {};
+  const defaults = Object.fromEntries(
+    Object.entries(dict).map(([k, f]) => [k, f?.meta?.default]),
+  );
+  if (defaults.idleTimeoutMs !== 30000) {
     failed += 1;
-    console.error(`✗ ${name}: idleTimeoutMs default drifted (${resolved.idleTimeoutMs})`);
+    console.error(`✗ ${name}: idleTimeoutMs default drifted (${String(defaults.idleTimeoutMs)})`);
   }
-  if (!["static", "realtime"].includes(resolved.mode)) {
+  if (!["static", "realtime"].includes(defaults.mode)) {
     failed += 1;
-    console.error(`✗ ${name}: bad mode`);
+    console.error(`✗ ${name}: bad mode default`);
+  }
+  /* 反向断言：字段**不能**是 volatile。字段级 volatile 会把输入类型改成
+     稳定引用包装，dsh 用 Config 校验配置时裸值被拒，插件直接不激活
+     （ValidationError: $.mode expected ... but got {}）。 */
+  const wronglyVolatile = Object.entries(dict).filter(([, f]) => f?.meta?.volatile === true).map(([k]) => k);
+  if (wronglyVolatile.length > 0) {
+    failed += 1;
+    console.error(`✗ ${name}: volatile fields break config validation: ${wronglyVolatile.join(", ")}`);
   }
   if (failed === 0) console.log(`✓ ${name}`);
 }

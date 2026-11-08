@@ -35,7 +35,7 @@ export const inject = ["webServer"];
  */
 const MODE = z.union([z.const("static"), z.const("realtime")]);
 
-export const Config = z.object({
+const fields = z.object({
   mode: MODE.default("realtime"),
 
   /** `realtime` 模式的模糊半径（px）。半径越大越贵。 */
@@ -90,6 +90,19 @@ export const Config = z.object({
   idleTimeoutMs: z.natural().min(2000).max(60000).default(30000),
 });
 
+/**
+ * 注意：这里**不能**给字段加 `.volatile()`。
+ *
+ * dsh-settings 的 volatileForm() 会收集带 meta.volatile 的字段生成设置页
+ * 表单，但字段一旦 volatile，它的**输入类型**就变成「稳定引用」包装：
+ * dsh 用这个 Config 校验配置时，裸值会被拒 ——
+ *   ValidationError: $.mode expected "static" | "realtime" but got {}
+ * 结果整个插件在启动时不激活（警告 "1 entry did not activate"）。
+ *
+ * 所以设置页表单需要另一条路径（见 README 的 Known limitations）；
+ * 当前优先保证插件本身可用。
+ */
+export const Config = fields;
 /**
  * 把配置里的颜色化成 "r,g,b" 供 CSS 的 rgba(var(--x),alpha) 使用。
  * 支持 #rgb / #rrggbb / rgb() / rgba()；解析不了就回退到默认蓝。
@@ -984,12 +997,20 @@ function buildScript(cfg) {
   var origCheck=checkResources;
   checkResources=function(){ lastResourceAt=Date.now(); return origCheck.apply(null,arguments); };
 
+  /* ② 静态层兜底：仅在「动态层没接管」时使用，而且必须满足
+     painted（#root 真有子节点）+ 资源静默 800ms + **额外 3s**。
+     额外 3s 是关键：壳子挂上时数据请求还在路上，早退会得到
+     「只有壳子没有数据」的界面（这正是之前报的问题）。 */
+  var paintedAt=0;
   var exitTimer=setInterval(function(){
     if(done) return;
+    if(takenOver) return;                     /* 动态层已接管，交给 phase==='ready' */
     var rootEl=document.getElementById('root');
-    var painted=!!(rootEl&&rootEl.childNodes.length>0);   /* DOM 事实，不是文本长度 */
+    var painted=!!(rootEl&&rootEl.childNodes.length>0);
+    if(painted&&!paintedAt) paintedAt=Date.now();
     var quiet=Date.now()-lastResourceAt>800;
-    if(painted&&quiet&&mountFired){
+    var settled=paintedAt&&Date.now()-paintedAt>3000;
+    if(painted&&quiet&&settled){
       clearInterval(exitTimer);
       pay('tail',1);
       finish(t('contentReady'));
@@ -1287,7 +1308,9 @@ self.onmessage=function(e){
  * @param config - 已校验的 {@link Config}。
  */
 export function apply(ctx, config) {
-  /* 用 schema 校验（而不是直接读入），设置页改的值也会被同一套规则检查。 */
+  /* 用**非 volatile** 的 fields 校验：导出的 Config 里每个字段都带
+     .volatile()，其输出是「稳定引用」包装（{ get() }），直接读会拿到
+     包装对象而不是值。fields 才是拿普通配置值的那一份。 */
   const cfg = Config(config ?? {});
 
   /* 设置页：dsh 按插件的 Config schema 自动生成表单
