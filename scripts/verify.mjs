@@ -140,6 +140,78 @@ for (const { name, cfg } of cases) {
   }
 }
 
+/* 端到端冒烟：用最小 DOM/ctx stub 真正执行一次 apply()。
+   上一轮的失败就是「语法 OK、factory 可求值，但 apply() 里调了已删除的
+   boot()」→ dsh 启动报 "dsh-betterloading: failed / did not activate"。 */
+{
+  const sandbox = {
+    window: { __ModuleLoader__: { load: (d) => { sandbox.__decl = d; } } },
+    navigator: { language: "zh-CN" },
+    location: { href: "http://x/" },
+    performance: { now: () => Date.now() },
+    MutationObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: () => 0,
+    cancelAnimationFrame: () => {},
+  };
+  const mkEl = () => ({
+    style: { setProperty() {} },
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    appendChild() {}, setAttribute() {}, getAttribute: () => null, addEventListener() {},
+    getBoundingClientRect: () => ({ width: 0, height: 0, left: 0, top: 0, bottom: 0, right: 0 }),
+    querySelectorAll: () => [], contains: () => false,
+    innerHTML: "", textContent: "", children: [], firstElementChild: null, width: 0, height: 0,
+  });
+  sandbox.document = {
+    getElementById: () => mkEl(), body: mkEl(), head: mkEl(), documentElement: mkEl(),
+    createElement: () => mkEl(), addEventListener() {}, querySelectorAll: () => [],
+  };
+  sandbox.setTimeout = () => 0;
+  sandbox.setInterval = () => 0;
+  sandbox.clearTimeout = () => {};
+  sandbox.clearInterval = () => {};
+
+  const vm = await import("node:vm");
+  try {
+    vm.createContext(sandbox);
+    vm.runInContext(CLIENT, sandbox, { timeout: 5000 });
+    const decl = sandbox.__decl;
+    if (!decl || typeof decl.factory !== "function") throw new Error("factory missing");
+    const mod = decl.factory(() => ({}));
+    if (typeof mod.apply !== "function") throw new Error("apply missing");
+    const ctx = {
+      inject: (deps, cb) => { try { cb({ settings: { configure: () => () => {} } }); } catch (e) { throw e; } },
+      on: () => () => {},
+      effect: (f) => f(),
+    };
+    mod.apply(ctx);
+  } catch (error) {
+    failed += 1;
+    console.error(`✗ client bundle: apply() threw — ${error.message}`);
+  }
+}
+
+/* 客户端 bundle 里 apply() 不能引用已删除的内部函数（曾经留了个 boot()
+   调用，导致整个 bundle 加载失败、插件在启动时报 "did not activate"）。 */
+{
+  const i = CLIENT.indexOf("function apply(ctx)");
+  if (i < 0) {
+    failed += 1;
+    console.error("✗ client bundle: apply() missing");
+  } else {
+    const body = CLIENT.slice(i);
+    const declared = new Set(
+      [...body.matchAll(/(?:function\s+|const\s+|let\s+|var\s+)([A-Za-z_$][\w$]*)/g)].map((m) => m[1]),
+    );
+    for (const dead of ["boot", "ensureDom", "renderIcon", "startWorker", "pctRaf"]) {
+      const called = new RegExp("(?<![.\\w$])" + dead + "\\s*\\(").test(body);
+      if (called && !declared.has(dead)) {
+        failed += 1;
+        console.error(`✗ client bundle: calls removed function "${dead}()"`);
+      }
+    }
+  }
+}
+
 /* 水位必须是阶段预算之和：所有注水点都走 pay()，不允许散落的固定体积。 */
 {
   const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
