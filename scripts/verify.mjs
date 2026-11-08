@@ -111,6 +111,15 @@ if (!CLIENT.includes("function finish(reason)")) {
   }
 }
 
+/* 泛光不能框到自己：遮罩内部节点必须被排除。 */
+{
+  const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  if (!src.includes("overlayEl.contains(n)") && !src.includes("ov.contains(n)")) {
+    failed += 1;
+    console.error('✗ index.js: DOM glow does not exclude overlay-internal nodes');
+  }
+}
+
 /* 图标必须是完整路径：截断的 path 会画出一个残缺的鲸鱼。 */
 {
   const m = /const WHALE_ICON =[\s\S]*?"<\/svg>";/.exec(CLIENT);

@@ -954,6 +954,8 @@ function buildScript(cfg) {
             var n=added[j];
             if(!n||n.nodeType!==1) continue;
             if(n.id&&n.id.indexOf('__bl')===0) continue;
+            var ov=document.getElementById('__bl');
+            if(ov&&ov.contains(n)) continue;      /* 遮罩自身不参与 */
             pending.push(n);
             if(pending.length>200) pending.splice(0,100);
           }
@@ -983,9 +985,15 @@ function buildScript(cfg) {
       if(done||!pending.length) return;
       var batch=pending; pending=[];
       var shown=0;
+      var overlayEl=document.getElementById('__bl');
       for(var i=0;i<batch.length&&shown<4;i++){
         var n=batch[i];
         if(!n.isConnected) continue;
+        /* 绝不框自己：遮罩、铭牌、清单行、里程表列、泛光框本身
+           都长在 #__bl 里面，contains 一次就能全部排掉。 */
+        if(overlayEl&&overlayEl.contains(n)) continue;
+        if(n.id&&n.id.indexOf('__bl')===0) continue;
+        if(n.className&&String(n.className).indexOf('bl-glow')>=0) continue;
         var r=areaFor(n);
         if(!r) continue;
         flashGlowRect(r);
