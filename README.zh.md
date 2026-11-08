@@ -144,6 +144,13 @@ dsh plugin --profile web remove dsh-betterloading
 
 ## 已知限制
 
+- **在 dsh 桌面端（Electron）不生效。** 遮罩靠 `webserver/index-inject` 注入，
+  而 `@deepseek-ai/dsh-host-webserver` 明确写着它「只服务浏览器；Electron 用
+  `file://` 加载 dist，并用 IPC 桥承载 fetch」—— 桌面端没有 `webServer`，
+  本插件因此不会激活。改成客户端插件也没用：`dsh-client-modules` 会拒绝
+  任何不是 `"web"` 的 `dsh.client.platform`（`lib/index.js`：
+  `if (decl === void 0 || decl.platform !== "web") return null`）。
+  要支持桌面端，需要一个 dsh 目前没有暴露的 Electron 侧注入点。
 - 只作用于 dsh 的 **Web UI**，不改变服务端行为。
 - 依赖 dsh 的 `webserver/index-inject` 事件与 `#root` 结构。dsh 大版本改动后可能需要跟进。
 - 隐藏 dsh 自带 boot 屏用的是**结构选择器**（类名含 `_boot_`），因为它的类名带 hash、会随打包变化。失败提示卡片特意保持可见。

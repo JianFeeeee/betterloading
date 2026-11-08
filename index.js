@@ -759,12 +759,29 @@ function buildScript(cfg) {
   watchRoot();
   var mountTimer=setInterval(function(){ if(watchRoot()) clearInterval(mountTimer); },100);
 
+  /* ===== 「历史已加载」的准确信号 =====
+     dsh 前端首屏用 session.list 拉会话历史（客户端源码：
+     this.remote.session.list({})），另有 job.list。它们完成 = 历史真的加载好了，
+     比「#root 里有几个字」这种启发式可靠得多。
+     状态：undefined=还没出现 / 'pending' / 'done' */
+  var historySignal, jobSignal, historySeenAt=0;
+  function critOf(url){
+    var pth='';
+    try{ pth=new URL(url,location.href).pathname; }catch(e){ return null; }
+    if(pth.indexOf('/api/session/list')===0||pth.indexOf('/api/session.list')===0) return 'session';
+    if(pth.indexOf('/api/job/list')===0||pth.indexOf('/api/job.list')===0) return 'job';
+    return null;
+  }
+
   var origFetch=window.fetch;
   window.fetch=function(input,init){
     var url=(typeof input==='string')?input:(input&&input.url)||'';
     var tracked=false;
     try{ tracked=new URL(url,location.href).pathname.indexOf('/api')===0; }catch(e){}
     if(!tracked) return origFetch.apply(this,arguments);
+    var crit=critOf(url);
+    if(crit==='session'){ if(historySignal!=='done') historySignal='pending'; if(!historySeenAt) historySeenAt=Date.now(); }
+    else if(crit==='job'){ if(jobSignal!=='done') jobSignal='pending'; }
     apiStarted++;
     var nm=label(url), rid=pushRow(t(nm)+' · '+shortName(url));
     flashGlow(url);
@@ -772,8 +789,18 @@ function buildScript(cfg) {
     pour(0.008,110);
     var p;
     try{ p=origFetch.apply(this,arguments); }catch(e){ apiDone++; finishRow(rid); pour(0.012,130); throw e; }
-    return p.then(function(r){ apiDone++; finishRow(rid); pour(0.012,130); return r; },
-                  function(e){ apiDone++; finishRow(rid); pour(0.012,130); throw e; });
+    return p.then(function(r){
+        apiDone++; finishRow(rid); pour(0.012,130);
+        if(crit==='session') historySignal='done';
+        else if(crit==='job') jobSignal='done';
+        return r;
+      },
+      function(e){
+        apiDone++; finishRow(rid); pour(0.012,130);
+        if(crit==='session') historySignal='done';   /* 失败也算「不再是 pending」 */
+        else if(crit==='job') jobSignal='done';
+        throw e;
+      });
   };
   var apiTimer=setInterval(function(){
     if(apiStarted>0){
@@ -788,6 +815,21 @@ function buildScript(cfg) {
     if(worker) worker.postMessage({type:'finish'});
     done=true;
     status.textContent=t('done'); setDetailText(reason||'');
+    /* 诊断：完成时的判定依据。排查「触发点不对」时直接读
+       window.__betterloadingDone，不必猜。 */
+    try{
+      var rr=document.getElementById('root');
+      window.__betterloadingDone={
+        reason:reason||'',
+        historySignal:historySignal||'none',
+        jobSignal:jobSignal||'none',
+        mounted:mounted,
+        rootText:rr?(rr.innerText||'').length:-1,
+        rootElems:rr?rr.querySelectorAll('*').length:-1,
+        apiStarted:apiStarted, apiDone:apiDone,
+        atMs:Math.round(performance.now())
+      };
+    }catch(e){}
     el.classList.add('__done');
     setTimeout(function(){
       removed=true;
@@ -802,13 +844,27 @@ function buildScript(cfg) {
     if(!r) return false;
     return (r.innerText||'').length>60 || r.querySelectorAll('button,[role=button],input').length>4;
   }
-  var steady=0, readySince=0;
+  var steady=0, readySince=0, historyDoneAt=0, guardStart=Date.now();
   var guard=setInterval(function(){
     if(done) return;
+
+    /* 主判定：会话历史真的加载完了（且页面已挂载），200ms 后收工 */
+    var critOk=(historySignal!=='pending')&&(jobSignal!=='pending');
+    if(mounted&&historySignal==='done'&&critOk){
+      if(!historyDoneAt) historyDoneAt=Date.now();
+      if(Date.now()-historyDoneAt>200){ clearInterval(guard); finish(t('contentReady')); return; }
+    }else{
+      historyDoneAt=0;
+    }
+
+    /* 兜底：历史信号始终没出现（版本差异/无历史）→ 退回内容启发式 */
+    var noHistorySignal=(historySignal===undefined)&&(Date.now()-guardStart>3000);
     var ready=mounted&&contentReady();
     if(ready&&!readySince) readySince=Date.now();
     var noPending=(apiStarted-apiDone)<=0;
-    if(ready&&noPending&&++steady>=2){ clearInterval(guard); finish(apiStarted?t('totalRequests',{n:apiStarted}):''); return; }
+    if(ready&&noPending&&(noHistorySignal||historySignal==='done')&&++steady>=2){
+      clearInterval(guard); finish(apiStarted?t('totalRequests',{n:apiStarted}):''); return;
+    }
     if(!noPending) steady=0;
     if(ready&&readySince&&Date.now()-readySince>800){ clearInterval(guard); finish(t('contentReady')); return; }
   },200);
