@@ -152,13 +152,18 @@ Water-level state machine:
 ## Known limitations
 
 - **Does not work in dsh Desktop (Electron).** The overlay is injected through
-  `webserver/index-inject`, and `@deepseek-ai/dsh-host-webserver` documents that
-  it "serves browsers only; Electron loads dist over `file://` and carries fetch
-  over an IPC bridge" — there is no `webServer` there, so this plugin never
-  activates. A client-side bundle would not help either: `dsh-client-modules`
-  rejects any `dsh.client.platform` other than `"web"` (`lib/index.js`: `if (decl
-  === void 0 || decl.platform !== "web") return null`). Supporting the desktop
-  app needs an Electron-side injection point that dsh does not expose today.
+  `webserver/index-inject`, which only affects the index served by
+  `@deepseek-ai/dsh-host-webserver` / `dsh-host-frontend-static`. Desktop is an
+  Electron shell around the same Web app: it *does* run a Web Host (on an
+  OS-assigned port) but the page itself is loaded from `dsh-app://app/` out of
+  the packaged build, and only app HTTP/WebSocket traffic is forwarded to that
+  Host. `renderIndex` is not used there, so injected rows never reach the
+  document. Upstream `docs/subsystems/web-server` states it directly: "the
+  server serves browsers only: Electron loads built files over `file://` and
+  sends fetch requests through an IPC bridge, and does not use this server."
+  A client bundle would not help either: `dsh-client-modules` rejects any
+  `dsh.client.platform` other than `"web"`
+  (`if (decl === void 0 || decl.platform !== "web") return null`).
 - Affects the dsh **web UI** only; server behaviour is unchanged.
 - Depends on dsh's `webserver/index-inject` event and the `#root` structure. A major dsh change may require follow-up.
 - dsh's own boot screen is hidden via a **structural selector** (class contains `_boot_`) because its class names carry build hashes. The failure card is deliberately left visible.
