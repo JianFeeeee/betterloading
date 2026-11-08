@@ -70,7 +70,7 @@ dsh plugin --profile web remove dsh-betterloading
     mode: "realtime"     # realtime（默认，真模糊） | static（无实时滤镜）
     noise: 13            # static 模式颗粒强度 0-100
     tintLight: "rgba(250,252,255,.55)"
-    tintDark: "rgba(14,18,26,.62)"
+    tintDark: "rgba(12,15,22,.52)"
 ```
 
 | 选项 | 默认 | 说明 |
@@ -83,7 +83,7 @@ dsh plugin --profile web remove dsh-betterloading
 | `blur` | `10` | `realtime` 模式的模糊半径（px），0-60 |
 | `noise` | `13` | `static` 模式的颗粒强度，0-100 |
 | `tintLight` | `rgba(250,252,255,.55)` | 浅色主题磨砂底色 |
-| `tintDark` | `rgba(14,18,26,.62)` | 深色主题磨砂底色 |
+| `tintDark` | `rgba(12,15,22,.52)` | 深色主题磨砂底色 |
 | `maxBlob` | `0.04` | 单团水的最大体积（全屏比例）。决定一次加载最多推进多少 |
 | `waveSpeed` | `200` | 波速平方项 c²。越大波传得越快 |
 | `damping` | `0.35` | 阻尼。过大波传不到边缘，过小会一直震荡 |

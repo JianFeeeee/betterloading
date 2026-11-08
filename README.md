@@ -103,7 +103,7 @@ Override in your own profile patch layer (`$DSH_HOME/cordis.patch.yml` or the pr
     mode: "realtime"     # realtime (default) | static
     noise: 13            # static-mode grain strength, 0-100
     tintLight: "rgba(250,252,255,.55)"
-    tintDark: "rgba(14,18,26,.62)"
+    tintDark: "rgba(12,15,22,.52)"
 ```
 
 | Option | Default | Description |
@@ -116,7 +116,7 @@ Override in your own profile patch layer (`$DSH_HOME/cordis.patch.yml` or the pr
 | `blur` | `10` | Blur radius for `realtime` mode (px), 0-60 |
 | `noise` | `13` | Grain strength for `static` mode, 0-100 |
 | `tintLight` | `rgba(250,252,255,.55)` | Frost tint on light theme |
-| `tintDark` | `rgba(14,18,26,.62)` | Frost tint on dark theme |
+| `tintDark` | `rgba(12,15,22,.52)` | Frost tint on dark theme |
 | `maxBlob` | `0.04` | Max volume of one blob (fraction of screen). Caps how much a single load advances |
 | `waveSpeed` | `200` | c² of the wave equation. Higher travels faster |
 | `damping` | `0.35` | Damping. Too high and waves die before reaching the edges; too low and they ring |
