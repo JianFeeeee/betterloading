@@ -91,13 +91,23 @@ for (const { name, cfg } of cases) {
 
 /* 收工路径必须完整：曾经把 finish() 删掉却留着调用点，
    结果退出回调抛 ReferenceError、遮罩永不消失。 */
-if (!CLIENT.includes("function finish(reason)")) {
-  failed += 1;
-  console.error("✗ client bundle: finish() missing");
+{
+  const hostSrc = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  if (!hostSrc.includes("function finish(reason)")) {
+    failed += 1;
+    console.error("✗ index.js: finish() missing");
+  }
 }
 {
   const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-  const need = ["function finish(reason)", "window.__betterloading=", "takeover", "if(!done) finish(t('timeout'))"];
+  const need = [
+    "function finish(reason)",
+    "window.__betterloading=",
+    "takeover",
+    "pay('tail',1)",
+    "function pay(stage,fraction)",
+    "window.__BL_FULL__",
+  ];
   for (const token of need) {
     if (!src.includes(token)) {
       failed += 1;
@@ -117,6 +127,32 @@ if (!CLIENT.includes("function finish(reason)")) {
   if (src.includes("finish(t('contentReady'))") && !src.includes("function finish(reason)")) {
     failed += 1;
     console.error("✗ index.js: finish() called but not defined");
+  }
+}
+
+/* 收工后必须留够时间让水面涨满（补满序列约 1.5s），否则会「没涨满就消失」 */
+{
+  const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  const m = /removeChild\(el\);\s*\},\s*(\d{3,5})\);/.exec(src);
+  if (m && Number(m[1]) < 2000) {
+    failed += 1;
+    console.error(`✗ index.js: overlay removed after ${m[1]}ms, refill needs ~1.5s`);
+  }
+}
+
+/* 水位必须是阶段预算之和：所有注水点都走 pay()，不允许散落的固定体积。 */
+{
+  const src = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("function buildScript"));
+  if (/pour\(0\.\d+/.test(body)) {
+    failed += 1;
+    console.error("✗ index.js: raw pour(<fixed volume>) found — should go through pay(stage)");
+  }
+  for (const stage of ["boot", "resources", "mount", "deep", "tail"]) {
+    if (!body.includes(`${stage}:`)) {
+      failed += 1;
+      console.error(`✗ index.js: budget stage "${stage}" missing`);
+    }
   }
 }
 

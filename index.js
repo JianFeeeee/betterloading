@@ -486,6 +486,11 @@ function buildScript(cfg) {
       worker=new Worker(URL.createObjectURL(blob));
       worker.onmessage=function(ev){
         var m=ev.data||{};
+        /* 水面涨满的回执：收工后用它同步移除，而不是靠固定延时猜 */
+        if(m.type==='full'){
+          if(typeof window.__BL_FULL__==='function') window.__BL_FULL__();
+          return;
+        }
         if(m.type!=='state') return;
         /* 主线程只做低频 DOM 写入 */
         if(frost){
@@ -757,6 +762,30 @@ function buildScript(cfg) {
    * ========================================================== */
 
   var visualTimer=null;
+  /* ============================================================
+   * 水位 = 各阶段预算之和，总和恒为 1。任何一个时刻的百分比
+   * 都等于「已完成阶段的预算合计」，不再是一堆拍脑袋常量相加。
+   * ========================================================== */
+  var BUDGET={
+    boot:0.05,      /* 骨架出现 */
+    resources:0.55, /* 静态资源，按 N 均分 */
+    mount:0.10,     /* #root 首次有子节点 */
+    deep:0.25,      /* 动态层事件（会话/API） */
+    tail:0.05       /* 收尾补满 */
+  };
+  var spent={boot:0,resources:0,mount:0,deep:0,tail:0};
+  /* 向某阶段注水：不超过该阶段预算，也不超过全局封顶 */
+  function pay(stage,fraction){
+    if(done) return;
+    var cap=BUDGET[stage]||0;
+    var room=cap-spent[stage];
+    if(room<=0.0005) return;
+    var give=Math.max(0,Math.min(room,cap*fraction));
+    if(give<=0.0005) return;
+    spent[stage]+=give;
+    pour(give,140+Math.random()*120);
+  }
+
   /* ---- 资源阶段：用标准 Performance API 采信息（清单 / 泛光 / 水位）----
      这不是判定「是否加载完成」，只是把浏览器看得到的资源进度显示出来；
      完成与失败的判定仍留给动态层的官方事件。 */
@@ -793,10 +822,9 @@ function buildScript(cfg) {
       if(!fresh) break;
       if(!seen['flashed:'+nm0]&&nm0.indexOf('/plugins')<0&&nm0.indexOf('/api')<0){
         seen['flashed:'+nm0]=1;
-        /* 每个已完成资源 = 一团固定体积的水。资源多就涨得快，
-           少就涨得慢 —— 这是最初的因果模型，不做「摊分」。
-           总量由 worker 的 0.9999-committed 封顶，收工时会补满。 */
-        pour(0.11,150+Math.random()*90);
+        /* 资源阶段预算 0.55 按「预期资源数」均分：
+           第 k 个资源到位时，资源阶段完成 k/N。 */
+        pay('resources',1/Math.max(1,expected));
         var rid0=pushRow(t('resources')+' · '+shortName(nm0));
         /* 资源已经加载完才会出现在 entries 里，所以立刻标记完成，
            耗时取该条目自己的 duration（不是 push 到现在的时间）。 */
@@ -828,7 +856,7 @@ function buildScript(cfg) {
     if(!root) return false;
     if(root.childNodes.length>0){
       mountFired=true;
-      pour(0.12,180);
+      pay('mount',1);
       status.textContent=t('uiReady');
       setDetail(null);
       if(mo){ mo.disconnect(); mo=null; }
@@ -854,10 +882,10 @@ function buildScript(cfg) {
     if(visualTimer||takenOver) return;
     visualTimer=setInterval(function(){
       if(done||takenOver) return;
-      pour(0.010+Math.random()*0.008, 150+Math.random()*140);
+      pay('boot',0.5);
     },520);
   }
-  pour(0.03,120,0.5);
+  pay('boot',0.6);   /* 起始一团，让水面立刻有东西 */
   startIdleWave();
 
   /* ---- 失败态 ---- */
@@ -931,19 +959,44 @@ function buildScript(cfg) {
       };
     }catch(e){}
     if(el) el.classList.add('__done');
-    setTimeout(function(){
+    /* 不再用固定延时猜：等 worker 回报「水已涨满」再移除；
+       加 3.5s 保险，防止 worker 掉线导致永久停留。 */
+    var removedOnce=false;
+    function removeNow(){
+      if(removedOnce) return;
+      removedOnce=true;
       removed=true;
       if(worker){ worker.terminate(); worker=null; }
       if(el&&el.parentNode) el.parentNode.removeChild(el);
-    },1500);
+    }
+    window.__BL_FULL__=removeNow;
+    if(worker) worker.postMessage({type:'finish'});
+    setTimeout(removeNow,3500);
   }
 
-  /* ---- 退出 ----
-     正常退出由动态层驱动：客户端 bundle 订阅官方 sessions 事件
-     （api-session/added 的静默期 = 历史填充完毕），然后调本接口 finish()。
-     这里只保留硬超时，保证「动态层没接续」时也不会永久遮挡 ——
-     不再用「#root 里有几个字」这种启发式判断。 */
-  setTimeout(function(){ if(!done) finish(t('timeout')); },CFG.idleTimeoutMs);
+  /* ============================================================
+   * 退出：三级，全部基于客观信号
+   *   ① 动态层：sessions 事件静默（最早，由 client bundle 调 finish）
+   *   ② 静态层：#root 真的有子节点 且 资源静默 —— 用于动态层没接上时
+   *   ③ 硬超时：永不卡死
+   * ========================================================== */
+  var lastResourceAt=Date.now();
+  var origCheck=checkResources;
+  checkResources=function(){ lastResourceAt=Date.now(); return origCheck.apply(null,arguments); };
+
+  var exitTimer=setInterval(function(){
+    if(done) return;
+    var rootEl=document.getElementById('root');
+    var painted=!!(rootEl&&rootEl.childNodes.length>0);   /* DOM 事实，不是文本长度 */
+    var quiet=Date.now()-lastResourceAt>800;
+    if(painted&&quiet&&mountFired){
+      clearInterval(exitTimer);
+      pay('tail',1);
+      finish(t('contentReady'));
+    }
+  },250);
+
+  setTimeout(function(){ clearInterval(exitTimer); if(!done){ pay('tail',1); finish(t('timeout')); } },CFG.idleTimeoutMs);
 
   window.__blDiag={flashCalls:0,lit:0,peak:0,domGlow:0,resourceGlow:0};
 
@@ -1033,6 +1086,9 @@ function buildScript(cfg) {
       takenOver=true;
       if(visualTimer){ clearInterval(visualTimer); visualTimer=null; }
     },
+    /* 动态层按真实事件注水（会话/API），走 deep 阶段预算 */
+    deep:function(fraction){ pay('deep',fraction); },
+    budget:function(){ return {budget:BUDGET,spent:spent}; },
     pour:function(v,f,p){ if(done) return; pour(v,f,p); },
     finish:function(reason){ finish(reason); },
     fail:function(name,reason){ noteFailure(name,reason); },
@@ -1192,6 +1248,10 @@ function frame(){
     for(var k=N-1;k>=0;k-=3) d+=' L '+(k/(N-1)*VW).toFixed(1)+' '+(ys[k]+top).toFixed(1);
     d+=' L 0 '+(ys[0]+top).toFixed(1)+' Z';
     self.postMessage({type:'state',level:curLevel,top:top,clip:d});
+    if(done&&curLevel>0.995&&!self.__fullSent){
+      self.__fullSent=true;
+      self.postMessage({type:'full'});
+    }
   }
   setTimeout(frame,10);
 }
@@ -1215,7 +1275,7 @@ self.onmessage=function(e){
   } else if(m.type==='finish'){
     if(done) return;
     var need=0.9999-committed,z=0;
-    while(z<24&&need>0){ pourImpl(Math.min(MAX_BLOB,need),120+z*55); need-=MAX_BLOB; z++; }
+    while(z<24&&need>0){ pourImpl(Math.min(MAX_BLOB,need),60+z*38); need-=MAX_BLOB; z++; }
     done=true;
   }
 };
