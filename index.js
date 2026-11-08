@@ -36,6 +36,13 @@ export const inject = ["webServer"];
 const MODE = z.union([z.const("static"), z.const("realtime")]);
 
 const fields = z.object({
+  /**
+   * 加载层主开关。关掉后连 dsh 自带 boot 屏都不再隐藏，页面完全回到原生。
+   * host 侧单独用 {@link Toggle} 读这一个字段（其余字段是 volatile，
+   * host 读会破坏配置校验），所以它同时出现在这里只为让设置页能显示。
+   */
+  enabled: z.boolean().default(true),
+
   mode: MODE.default("realtime"),
 
   /** `realtime` 模式的模糊半径（px）。半径越大越贵。 */
@@ -359,6 +366,37 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
 @media (prefers-reduced-motion:reduce){
   .__bl_col{transition:none}
   #__bl_text.__bump{animation:none}}
+
+/* 窄屏：收窄铭牌、缩小字号、上移一点避免和底部输入框挤在一起 */
+@media (max-width:520px){
+  #__bl_text{min-width:0;width:min(88vw,320px);padding:15px 16px 13px;top:26%}
+  #__bl_iconwrap{margin-bottom:10px}
+  #__bl_title{font-size:14px;letter-spacing:.06em}
+  #__bl_status{font-size:11.5px;margin-top:7px}
+  #__bl_list{margin-top:11px;padding-top:9px;font-size:10.5px;line-height:1.6}
+  #__bl_fails{margin-top:9px;padding-top:8px;font-size:10.5px}
+  .__bl_fail_name{max-width:44%}
+  .__bl_fail_reason{font-size:10px}
+  #__bl_meta{margin-top:15px;font-size:10px;letter-spacing:.08em;gap:.35em}
+  .__bl_d{width:.58em}
+}
+@media (max-width:360px){
+  #__bl_text{width:92vw;padding:13px 13px 11px}
+  #__bl_title{font-size:13px}
+  #__bl_list,#__bl_fails{font-size:10px}
+  #__bl_meta{font-size:9.5px}
+}
+/* 矮屏（横屏手机、分屏）：改为垂直居中，避免 26%~34% 使铭牌贴边溢出 */
+@media (max-height:560px){
+  #__bl_text{top:50%;transform:translateY(-50%)}
+  #__bl.__done #__bl_text{transform:translateY(calc(-50% - 6px))}
+}
+/* 极矮（键盘弹起）：再收一档，并允许内部滚动 */
+@media (max-height:420px){
+  #__bl_text{max-height:86vh;overflow:auto;padding:12px 14px 10px}
+  #__bl_iconwrap{display:none}
+  #__bl_list{margin-top:8px;padding-top:7px}
+}
 `;
 }
 
@@ -1358,13 +1396,30 @@ self.onmessage=function(e){
  * @param ctx - Cordis 上下文。
  * @param config - 已校验的 {@link Config}。
  */
+/**
+ * 只解析主开关的极小 schema。
+ *
+ * 为什么单独一份：导出的 {@link Config} 字段全部 volatile（设置页表单的前提），
+ * 整份解析会让 dsh 的配置校验拒绝裸值。而 enabled 必须在 host 侧生效
+ * （决定要不要注入），所以只校验这一个布尔字段，其余字段一概不碰。
+ */
+export const Toggle = z.object({ enabled: z.boolean().default(true) });
+
 export function apply(ctx, config) {
   /* 用**非 volatile** 的 fields 校验：导出的 Config 里每个字段都带
      .volatile()，其输出是「稳定引用」包装（{ get() }），直接读会拿到
      包装对象而不是值。fields 才是拿普通配置值的那一份。 */
-  /* host 不读用户配置：volatile 字段的值是客户端专属的稳定引用，
+  /* 主开关：volatile 字段的值是稳定引用包装（{ get() }），先解包再判定。
+     只碰 enabled 这一个字段，其余字段一概不读。 */
+  const rawEnabled = config && config.enabled;
+  const enabledValue =
+    rawEnabled && typeof rawEnabled.get === "function" ? rawEnabled.get() : rawEnabled;
+  const on = Toggle({ enabled: enabledValue }).enabled;
+  if (!on) return;   /* 关掉加载层：不注入、不动 boot 屏 */
+
+  /* 其余配置 host 不读：volatile 字段的值是客户端专属的稳定引用，
      在这里读会让 dsh 的配置校验失败（实测 ValidationError: $.mode got {}），
-     插件随之不激活。用一个**独立的默认值实例**生成骨架即可。 */
+     插件随之不激活。用**独立的默认值实例**生成骨架即可。 */
   const cfg = fields({});
 
   /* 设置页：dsh 按插件的 Config schema 自动生成表单
