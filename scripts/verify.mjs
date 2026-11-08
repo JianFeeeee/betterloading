@@ -186,6 +186,22 @@ for (const { name, cfg } of cases) {
     failed += 1;
     console.error(`✗ index.js: worker 回报间隔过大 (${emit ? emit[1] : "?"}ms)`);
   }
+  /* 平滑只能作用于「水位变化」，不能作用于「第一次出现」。
+     否则磨砂会从 0 长到全屏 —— 观感是水面从上面降下来再升上去。 */
+  if (!src.includes("var surfaceSeeded=false")) {
+    failed += 1;
+    console.error("✗ index.js: 缺少首帧就位（水面会先铺满再上升）");
+  }
+  if (!src.includes("surfaceSeeded=true;\n          frostShownH=freshH;")) {
+    failed += 1;
+    console.error("✗ index.js: worker 首帧没有直接把磨砂高度对齐");
+  }
+  /* 水位 0 的正确视觉状态是全屏磨砂，不是 0。 */
+  if (!/#__bl_frost\{[^}]*height:100%/.test(src)) {
+    failed += 1;
+    console.error("✗ index.js: #__bl_frost 初始高度不是 100%（首帧会露出未遮挡的页面）");
+  }
+
   /* 平滑环必须在启动时拉起、收工时停掉 */
   if (!src.includes("startSmoothSurface();")) {
     failed += 1;

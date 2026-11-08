@@ -250,7 +250,7 @@ body[data-ds-dark-theme] #__bl{
 /* 唯一模糊层：覆盖 [0, 窄带底]，下边界由 clip-path 跟随水面曲线。
    只用一个 backdrop-filter 元素 —— 两个相邻元素必然出现边缘钳制缝，
    而 mask+backdrop-filter 在 Chrome 下组合不可靠（渐隐不生效、tint 双重叠加）。 */
-#__bl_frost{position:absolute;left:0;top:0;width:100%;height:0;will-change:height;
+#__bl_frost{position:absolute;left:0;top:0;width:100%;height:100%;will-change:height;
   ${frostFilter}
   background-color:var(--bl-tint);
   background-repeat:repeat;background-size:96px 96px;
@@ -574,8 +574,14 @@ function buildScript(cfg) {
    */
   var frostTargetH=0, frostShownH=0, frostTargetClip='', frostAppliedClip='';
   var cvTargetTop=0, cvShownTop=0, smoothRaf=0;
+  /* 首帧直接就位：平滑只该作用于「水位的变化」，不该作用于「第一次出现」。
+     否则磨砂会从 0 长到全屏 —— 看起来就是水面从上面降下来。 */
+  var surfaceSeeded=false;
   function smoothSurface(){
     if(removed){ smoothRaf=0; return; }
+    /* worker 首帧之前不写 DOM：此时目标值还是占位 0，写下去会把 CSS 的
+       height:100%（水位 0 的正确状态）冲掉，页面会裸露一瞬。 */
+    if(!surfaceSeeded){ smoothRaf=requestAnimationFrame(smoothSurface); return; }
     if(frost){
       var dh=frostTargetH-frostShownH;
       if(Math.abs(dh)<0.35){
@@ -633,11 +639,23 @@ function buildScript(cfg) {
         if(!liveSeen){ liveSeen=true; if(el) el.classList.add('__bl_live'); }
         /* worker 只回报目标值（约 20Hz），真正的 DOM 写入交给下面的
            rAF 插值环 —— 否则水位是每 100ms 跳一格，看起来一顿一顿。 */
+        var freshH=Math.max(0,Math.min(window.innerHeight,Math.ceil(m.top)+Math.min(220,window.innerHeight)));
         if(frost){
-          frostTargetH=Math.max(0,Math.min(window.innerHeight,Math.ceil(m.top)+Math.min(220,window.innerHeight)));
+          frostTargetH=freshH;
           if(m.clip) frostTargetClip="path('"+m.clip+"')";
         }
         cvTargetTop=m.top;
+        if(!surfaceSeeded){
+          /* worker 的第一帧：磨砂与波带直接就位，不从别处滑过来。 */
+          surfaceSeeded=true;
+          frostShownH=freshH;
+          cvShownTop=m.top;
+          if(frost){
+            frost.style.height=frostShownH.toFixed(1)+'px';
+            if(frostTargetClip){ frostAppliedClip=frostTargetClip; frost.style.clipPath=frostTargetClip; }
+          }
+          if(cv){ cv.style.top=cvShownTop.toFixed(1)+'px'; cv.style.height=Math.min(220,window.innerHeight)+'px'; }
+        }
         targetPct=m.level*100;
       };
       worker.postMessage({
