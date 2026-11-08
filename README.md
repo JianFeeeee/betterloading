@@ -14,6 +14,7 @@ The most familiar slow-network scene: the shell UI has already rendered, but the
 - **A real water surface**: a 1-D damped wave equation integrated every frame. Waves travel, reflect off both edges, and interfere. Not a scrolling texture.
 - **The blur boundary *is* the water surface**: the frost layer's clip geometry is regenerated from the wave curve every frame (`clip-path: path(...)`), not a horizontal line.
 - **Two frost modes** (below): static sampling (default, zero realtime filters) or real blur.
+- **Compositor-only highlights**: the glow boxes animate `opacity` and position via `translate3d`, never `box-shadow` — measured near-zero frame cost.
 - **Theme aware**: follows dsh's `body[data-ds-dark-theme]` for both palette and plate styling.
 - **Never touches your business requests**: `fetch` is wrapped for counting only and returns the original promise; no dsh package file is modified.
 - **Never traps you**: removed on content-ready, with a fallback check and a hard timeout.

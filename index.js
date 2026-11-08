@@ -172,15 +172,21 @@ div[class*="_boot_"]:not(:has(div[class*="_failed_"])){background:transparent !i
 
 /* 加载高亮框：每个并发加载各自一个框（JS 池化），
    颜色由 --bl-glow-rgb 控制（配置项 glowColor 换算而来）。 */
-.bl-glow{position:absolute;pointer-events:none;border-radius:14px;
-  opacity:0;transform:scale(.985);
-  background:radial-gradient(ellipse at center,
-    rgba(var(--bl-glow-rgb),.20),rgba(var(--bl-glow-rgb),.04) 72%,transparent 100%);
-  box-shadow:0 0 0 1.5px rgba(var(--bl-glow-rgb),.85),
-             0 0 28px 6px rgba(var(--bl-glow-rgb),.45),
-             inset 0 0 30px rgba(var(--bl-glow-rgb),.22);
-  transition:opacity .16s ease-out,transform .16s ease-out}
-.bl-glow.__lit{opacity:1;transform:scale(1)}
+/* 性能要点：发光框面积很大（可达上千像素宽），
+   - 不用 box-shadow：28px 半径的外阴影会重绘整块区域；
+   - 不改 width/height/left/top 做动画：那些是布局属性。
+   改为：位置用 translate3d，动画只动 opacity（纯合成），
+   光晕用多层渐变背景代替阴影。 */
+.bl-glow{position:absolute;left:0;top:0;pointer-events:none;border-radius:14px;
+  box-sizing:border-box;
+  border:1.5px solid rgba(var(--bl-glow-rgb),.85);
+  background:
+    radial-gradient(ellipse 60% 55% at center,
+      rgba(var(--bl-glow-rgb),.22),rgba(var(--bl-glow-rgb),.06) 62%,transparent 82%),
+    linear-gradient(180deg,rgba(var(--bl-glow-rgb),.05),rgba(var(--bl-glow-rgb),.02));
+  opacity:0;will-change:opacity;contain:layout paint;
+  transition:opacity .18s ease-out}
+.bl-glow.__lit{opacity:1}
 @media (prefers-reduced-motion:reduce){.bl-glow{transition:none}}
 
 /* 铭牌里的加载清单 */
@@ -355,8 +361,9 @@ function buildScript(cfg) {
     }
     var el=glowPool.shift();
     if(!el) return;
-    el.style.left=r.x+'px'; el.style.top=r.y+'px';
+    /* 只用合成友好的属性：尺寸一次性写，位置走 translate3d */
     el.style.width=r.w+'px'; el.style.height=r.h+'px';
+    el.style.transform='translate3d('+r.x+'px,'+r.y+'px,0)';
     var item={el:el,x:r.x,y:r.y,w:r.w};
     glowBusy.push(item);
     lightGlow(item);
