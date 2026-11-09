@@ -178,14 +178,12 @@ Water-level state machine:
 
 ## Known limitations
 
-- **Works on dsh Desktop too** (verified against the AppImage + its pinned
-  runtime 0.1.0-rc.6). The desktop app is an Electron shell that starts an
-  embedded `dsh web` and `loadURL`s it, so `webserver/index-inject` reaches the
-  document. Two API gaps are handled inside the plugin: the older runtime only
-  has `webServer.tapIndex(html => html)` (no inject event table), and it has no
-  `configForms` client service — see [`docs/desktop.md`](docs/desktop.md).
-  What desktop does *not* get is the Settings page, because that needs the
-  0.2.x client slot machinery.
+- **Works on the official Desktop app with no adaptation.** It is an Electron
+  shell whose Host hands the `webserver/index-inject` table to the renderer over
+  Node IPC, so the plugin takes the same path as in a browser (Settings page
+  included). Only third-party shells need work — they often pin an old dsh whose
+  inject API is `webServer.tapIndex(html => html)`, which the plugin also
+  supports. See [`docs/desktop.md`](docs/desktop.md).
 - Affects the dsh **web UI** only; server behaviour is unchanged.
 - Depends on dsh's `webserver/index-inject` event and the `#root` structure. A major dsh change may require follow-up.
 - dsh's own boot screen is hidden via a **structural selector** (class contains `_boot_`) because its class names carry build hashes. The failure card is deliberately left visible.

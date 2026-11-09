@@ -160,12 +160,11 @@ dsh plugin --profile web remove dsh-betterloading
   `file://` 加载已构建文件，并经 IPC 桥接发送 fetch 请求，不使用本服务器。」
   改成客户端插件也没用：`dsh-client-modules` 会拒绝任何不是 `"web"` 的
   `dsh.client.platform`（`if (decl === void 0 || decl.platform !== "web") return null`）。
-- **桌面端也能用**（已用 AppImage 及其钉死的 runtime 0.1.0-rc.6 实测）。
-  桌面端是一个 Electron 壳，内嵌 `dsh web` 再 `loadURL` 它，所以
-  `webserver/index-inject` 能到达文档。插件内部已处理两处 API 差异：旧
-  runtime 只有 `webServer.tapIndex(html => html)`（没有注入事件表），也没有
-  `configForms` 客户端服务——细节见 [`docs/desktop.md`](docs/desktop.md)。
-  桌面端**没有设置页**，那需要 0.2.x 的客户端 slot 机制。
+- **官方桌面端零适配可用。** 它是一个 Electron 壳，Host 把
+  `webserver/index-inject` 的注入表通过 Node IPC 交给渲染进程，所以插件走的
+  和在浏览器里同一条路（设置页同样可用）。只有第三方壳需要处理——它们常钉死
+  一个很旧的 dsh，注入 API 是 `webServer.tapIndex(html => html)`，插件已兼容。
+  细节见 [`docs/desktop.md`](docs/desktop.md)。
 - 只作用于 dsh 的 **Web UI**，不改变服务端行为。
 - 依赖 dsh 的 `webserver/index-inject` 事件与 `#root` 结构。dsh 大版本改动后可能需要跟进。
 - 隐藏 dsh 自带 boot 屏用的是**结构选择器**（类名含 `_boot_`），因为它的类名带 hash、会随打包变化。失败提示卡片特意保持可见。
