@@ -55,12 +55,138 @@ WebServer.renderIndex(html)
 
 ---
 
-## 2. 路线 A：把注入内容写进打包的 index.html（推荐先试）
+
+## 2. 端侧适配清单
+
+先看这张表，再决定走哪条路线。**「必须」的三项缺一不可**，任一项没做，页面里都不会有遮罩。
+
+| # | 适配项 | 类别 | 不做会怎样 |
+|---|---|---|---|
+| A1 | 注入行进入文档 | **必须** | 没有遮罩，什么都没发生 |
+| A2 | CSP 放行内联脚本与 blob worker | **必须** | 有遮罩但不持动（worker 起不来，主脚本被拦） |
+| A3 | 退出判定降级 | **必须** | 遮罩永不消失，或页面还空着就消失 |
+| B1 | 设置页的替代方案 | 建议 | 只能改快照，改配置要重打补丁 |
+| B2 | 主题跟随 | 通常自动 | 深色下仍用浅色磨砂 |
+| B3 | 首帧层的价值 | 说明 | 无实际损失（桌面端加载快） |
+| C1 | 客户端 bundle 分发 | **做不到** | 设置页、官方 phase 信号都拿不到 |
+
+### A1. 注入行进入文档（必须）
+
+插件通过 `webserver/index-inject` 产出四行：`style` / worker 源码 / 遮罩结构 / 主线程脚本。
+Electron 不消费这张表，所以要把它「补进」文档。两条路：
+
+- **路线 A**（改打包产物）：见下一节，用 `scripts/patch-desktop-index.mjs`
+- **路线 B**（改 Electron）：让它调用 `renderIndex`
+
+**判据**：控制台里 `document.getElementById('__bl')` 不是 `null`。
+
+### A2. CSP 放行内联脚本与 blob worker（必须）
+
+这一项最容易被漏掉，而且**失败是静默的**：遮罩出现了，但水面一动不动，因为脚本被 CSP 拦了。
+
+插件需要两样东西：
+
+```text
+script-src  'unsafe-inline'        # 主线程脚本是内联 <script>
+worker-src  blob:                  # 波动在 new Worker(URL.createObjectURL(blob)) 里跑
+```
+
+Electron 的默认 CSP 往往只留 `'self'`，于是：
+
+- 内联主脚本被拦 → `window.__betterloading` 是 `undefined` → 水位永远 0
+- `blob:` worker 被拦 → canvas 不画 → 没有波浪
+
+**适配方式**（任一）：
+
+1. 放宽 Electron 加载 index 时的 CSP（`Content-Security-Policy` meta 或响应头）
+2. 给内联脚本加 `nonce`，并在 CSP 里声明 `'nonce-…'`（更严格，推荐）
+3. 干脆把注入内容改成外部文件引用（`<script src>`），但这又要求 Electron 能服务那些文件
+
+**判据**（三条都要）：
+
+```js
+typeof window.__betterloading          // "object"
+document.getElementById('__bl').className  // 含 "__bl_live"（worker 首帧后挂上）
+window.__blDiag.inFlight()             // 不报错（说明主脚本完整执行了）
+```
+
+若 `__bl` 在但没有 `__bl_live`，基本可以断定 worker 被 CSP 拦了。控制台会有
+`Refused to create a worker from 'blob:…'`。
+
+### A3. 退出判定降级（必须）
+
+web 端的退出靠两个官方信号：`sessions.list.phase` 与 `workspaces.list.phase` 都变成
+`ready`。桌面端没有客户端 bundle，这两个信号**拿不到**，只剩下静态层兜底：
+
+```text
+#root 有子节点  +  没有在飞请求  +  资源静默 800ms  +  壳子挂上后稳定一段时间
+```
+
+这套在桌面端通常够用（本地文件加载很快），但两种情况要手动调：
+
+| 现象 | 处理 |
+|---|---|
+| 内容多、数据请求慢，遮罩提前撤掉 | 调大 `idleTimeoutMs`（默认 60000，上限 180000） |
+| 页面一直不出内容，遮罩一直挂着 | 这是**对的**行为，等 idle 超时（60s 无网络活动）或用户自行刷新 |
+
+注意桌面端**拿不到设置页**（见 C1），所以这些值要在打补丁时写进快照。
+
+**判据**：加载完成后 `#__bl` 从 DOM 消失，且页面里的侧栏、会话列表是完整的
+（不是只有一个空壳）。
+
+### B1. 设置页的替代方案（建议）
+
+配置页走的是客户端 slot `plugins.bundle.config`，桌面端不加载客户端 bundle，
+所以**桌面端没有设置页**。可选做法：
+
+1. **改快照**（最省事）：在 web 端调好配置 → 重新抓 index → 重新打补丁。
+   插件的 `configure()` 会把快照里的值当作初始值。
+2. **写进 HTML**：手工改注入的 `<style>` 里 `--bl-tint` 等变量。
+3. **自建设置页**：改 Electron 提供原生界面，工作量最大。
+
+### B2. 主题跟随（通常自动）
+
+插件靠 `body[data-ds-dark-theme]` 判断深浅色，这是 dsh 前端自己维护的属性，
+桌面端用的是同一套前端产物，**通常无需适配**。
+
+需要核对的是：Electron 的系统主题切换是否也会更新这个属性。若不更新，
+深色系统下会显示浅色磨砂。
+
+**判据**：系统切到深色后，`document.body.getAttribute('data-ds-dark-theme')` 变成
+`""`（属性存在、值为空），且磨砂底色变成 `rgba(12,15,22,.52)` 附近。
+
+### B3. 首帧层的价值（说明，无需动作）
+
+web 端的首帧层（隐藏自带启动屏 + 完整遮罩 + 纯 CSS 波）是为了覆盖「HTML 到了但
+bundle 还在路上」那段空窗。桌面端从本地读文件，这段窗口极短，所以首帧层的意义
+不大——但也不会造成问题，可以照原样保留。
+
+### C1. 客户端 bundle 分发（做不到，需上游）
+
+这一项**无法在端侧适配**，必须知道原因，否则会一直往错的方向试：
+
+```js
+// @deepseek-ai/dsh-client-modules (host 侧)
+if (decl === void 0 || decl.platform !== "web") { ...; return null }   // 不分发
+```
+
+- 客户端 bundle 是通过 `/plugins/??…` 由 **web host** 动态拼接的
+- 桌面端从 `dsh-app://app/` 读打包产物，不经过 web host
+- 而且 host 侧的过滤只认 `"web"`，没有 `"desktop"` / `"electron"` 这种值
+
+结论：**设置页、`configForms` 配置桥、`sessions/workspaces` 的 ready 信号，
+在桌面端一个都用不上。** 桌面端只能靠快照 + 静态层兜底。
+
+要真正支持，需要上游拆开「平台」这个概念（例如允许 `platform: "desktop"` 并让
+Electron 取 bundle），然后插件这边把渲染层做成「有客户端能力时用官方 slot，
+没有时退化成注入脚本」的两条路径。
+
+## 3. 路线 A：把注入内容写进打包的 index.html（推荐先试）
 
 不碰 Electron 代码，只改它读的那份 `index.html`。代价是**配置被快照固定**
 （设置页在桌面端仍然不可用），升级 dsh Desktop 后要重做。
 
-### A-1. 定位桌面端产物
+### 3-1. 定位桌面端产物
 
 ```bash
 # 常见位置，按命中取第一个
@@ -81,7 +207,7 @@ find /tmp/dsh-app -name 'index.html' -not -path '*node_modules*'
 `asar integrity` / `electron-builder` 的 `asarUnpack` + 签名），先看第 4 节
 的「放弃条件」。
 
-### A-2. 从这台机器上跑着的 web 端抓一份快照
+### 3-2. 从这台机器上跑着的 web 端抓一份快照
 
 改造内容必须来自**同一版本的 dsh + 同一版本的插件**，否则 worker 协议会错配。
 
@@ -99,7 +225,7 @@ grep -c 'id="__bl"' /tmp/web-index.html   # 必须 ≥1
 dsh web    # 另一个终端；它会打印带 token 的 URL
 ```
 
-### A-3. 打补丁
+### 3-3. 打补丁
 
 ```bash
 # 只预览会插入什么
@@ -119,14 +245,14 @@ node scripts/patch-desktop-index.mjs \
   插到 `<head>` / `<body>` 之后（顺序与 web 端一致，**worker 必须在主脚本之前**）
 - **幂等**：反复执行结果逐字节一致，已存在的手工注入也会被清掉
 
-### A-4. 重新打包并启动
+### 3-4. 重新打包并启动
 
 ```bash
 npx @electron/asar pack /tmp/dsh-app /path/to/app.asar
 # 恢复签名（若原包有签名），然后启动桌面端
 ```
 
-### A-5. 验证（缺一不可）
+### 3-5. 验证（缺一不可）
 
 打开桌面端，在开发者工具控制台里：
 
@@ -150,12 +276,12 @@ grep -c '#__bl{position:fixed'      <patched-index.html>   # 1
 
 ---
 
-## 3. 路线 B：让 Electron 消费 `index-inject`（配置可变，但要改代码）
+## 4. 路线 B：让 Electron 消费 `index-inject`（配置可变，但要改代码）
 
 如果用户希望**设置页改完立刻生效**、或者不想每次升级都重做，就得让 Electron
 在返回 index 时调用 web 端同一个入口。
 
-### B-1. 找到桌面端的 index 供给点
+### 4-1. 找到桌面端的 index 供给点
 
 在解包后的 `app.asar` 里搜：
 
@@ -167,7 +293,7 @@ grep -rn "index.html" /tmp/dsh-app --include=*.js | grep -v node_modules | head
 
 你要找的是那个**读出 `dist/index.html` 文本并交给协议响应**的函数。
 
-### B-2. 在它返回前插入一次 `renderIndex`
+### 4-2. 在它返回前插入一次 `renderIndex`
 
 改造的语义等价于 web 端的这一行（`dsh-host-frontend-static`）：
 
@@ -200,9 +326,9 @@ grep -rn "dsh-host-webserver" /tmp/dsh-app --include=package.json | head
   若拿不到 `ctx`（Electron 主进程与 harness 分处不同进程），就必须
   走 IPC 让 harness 侧算好再回传，或者退回路线 A。
 
-### B-3. 验证
+### 4-3. 验证
 
-同 A-5。额外确认**动态生效**：
+同 3-5。额外确认**动态生效**：
 
 ```bash
 # 改一个配置（例如 glowColor），不改 index，重启桌面端后应看到新颜色
@@ -210,7 +336,7 @@ grep -rn "dsh-host-webserver" /tmp/dsh-app --include=package.json | head
 
 ---
 
-## 4. 什么时候该停下来
+## 5. 什么时候该停下来
 
 出现以下任一情况，**如实告诉用户做不到**，不要硬改：
 
@@ -218,7 +344,7 @@ grep -rn "dsh-host-webserver" /tmp/dsh-app --include=package.json | head
 |---|---|---|
 | asar 有完整性校验/代码签名 | `npx @electron/asar extract` 成功但启动报 `Integrity check failed` | 改了会被拒载，除非同时重签（多数用户没有证书） |
 | 桌面端不加载 dist 里的 `index.html` | 打包产物里搜不到 `index.html`，或页面由运行时拼字符串生成 | 没有稳定的注入点 |
-| 桌面端与 harness 跨进程且无 IPC 通道 | B-2 里 `ctx` 拿不到，且没有现成 IPC | 无法在渲染前拿到注入行 |
+| 桌面端与 harness 跨进程且无 IPC 通道 | 4-2 里 `ctx` 拿不到，且没有现成 IPC | 无法在渲染前拿到注入行 |
 | 用户不接受升级后重做 | — | 路线 A 的快照会随 dsh/插件升级失效（worker 协议可能变） |
 
 另外两种情况请**明确告知**，它们不是缺陷：
@@ -231,7 +357,7 @@ grep -rn "dsh-host-webserver" /tmp/dsh-app --include=package.json | head
 
 ---
 
-## 5. 排错
+## 6. 排错
 
 按现象对号入座。
 
@@ -257,5 +383,5 @@ grep -rn "dsh-host-webserver" /tmp/dsh-app --include=package.json | head
   纯 CSS 假波随之淡出。若一直缺失，说明 worker 没启动（先查上一条）。
 
 **升级 dsh Desktop 之后失效**
-- 预期行为。重做路线 A-1 到 A-4，并**重新抓快照**（插件若有版本变化，
+- 预期行为。重做路线 3-1 到 3-4，并**重新抓快照**（插件若有版本变化，
   旧快照的 worker 协议可能不匹配）。
