@@ -39,6 +39,38 @@ mainWindow.loadURL(serverUrl)
 （本仓库早期版本的 README 曾按上游 `docs/subsystems/web-server` 的描述写过
 「Desktop 从 `dsh-app://app/` 加载」——那是另一个部署形态，不适用于这个桌面壳。）
 
+### 它用哪个 runtime（重要）
+
+`runtime-manager.js` 的优先级：
+
+```js
+// Priority: DSH_BIN -> machine dsh -> verified managed cache -> download
+if (env.DSH_BIN)      → 用它
+findInstalledDsh()    → PATH / nvm / ~/.local/bin 里的 dsh
+verified cache        → 之前下载过的
+download              → dsh-runtime-<钉死版本>.tar.gz
+```
+
+**但这台机器上的实测结果是**：用机器里装的 0.2.1-rc.2 时，桌面端**打不开**：
+
+```
+dsh web authentication required; reopen the URL printed by dsh web.
+（HTTP 401）
+```
+
+原因在桌面壳自己：它只按 `http://host:port` 探测就绪（`waitForServer` 要求
+200 + `text/html`），而 dsh ≥ 0.2 的 web server 会打印一条**带 token** 的 URL，
+未授权时对 `/` 返回 401。桌面端没去取那个 token，所以永远等不到 200。
+
+所以实际可用矩阵是：
+
+| 组合 | 结果 |
+|---|---|
+| 桌面端 + 它钉死的 runtime（实测 0.1.0-rc.6） | ✅ 可用（注入、动效、收工全部验证过） |
+| 桌面端 + 机器里装的 dsh 0.2.1-rc.2 | ❌ 401，窗口白屏 |
+
+想让桌面端用新版 dsh（从而拿到设置页），必须补上 token：见 §6。
+
 ### 版本矩阵（重要）
 
 | | 本机 web 部署 | 桌面端内嵌 runtime |
@@ -213,3 +245,30 @@ status : Ready    diag: level=82.5    （收工前）
 2. 有 `#__bl` 但不动 —— 看控制台有没有 `Refused to create a worker from 'blob:'`，或 `window.__betterloading` 是不是 `undefined`
 3. 有 `__bl_live` 但页面顶部报 `did not activate` —— 看 2.2
 4. 一切正常但收工太早/太晚 —— 调 `idleTimeoutMs`（旧版没有设置页，见第 4 节）
+
+## 6. 可选：让桌面端用新版 dsh（换取设置页）
+
+新版 dsh 需要 token，而桌面壳不取。补丁很小，改 `app/main/main.js`：
+
+```js
+// 1) 抓子进程 stdout 里那条带 token 的 URL
+proc.stdout.on('data', (chunk) => {
+  appendLog(chunk)
+  const found = /dsh web: (http:\/\/[^\s"'`]+?\?token=[A-Za-z0-9_-]+)/.exec(String(chunk))
+  if (found) authorizedUrl = found[1]
+})
+
+// 2) 探测与加载都用它
+if (authorizedUrl) serverUrl = authorizedUrl
+await waitForServer(serverUrl, timeoutMs)
+mainWindow.loadURL(serverUrl)
+```
+
+**状态：这段补丁我写了，但没能在当前执行环境里跑通验证** —— 后台常驻的
+Electron 进程会被这个环境的工具回收（`exit 137`），窗口起不来。所以：
+
+- 补丁思路基于 `e2.log` 里实测到的 401 与 dsh 的启动横幅，逻辑上是成立的
+- 但「改完之后窗口真的能打开」这一步**没有验证过**，不要当成已验证结论
+
+如果要做，建议：在本机手动跑一次 `dsh web`，确认横幅里确实有
+`?token=...`，再照上面两行改，然后看窗口是否落在 200 上。
