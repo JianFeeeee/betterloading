@@ -305,6 +305,41 @@ for (const { name, cfg } of cases) {
   }
 }
 
+/* 桌面端（旧 runtime 0.1.0-rc.x）适配：
+   · 注入只有 tapIndex(html=>html)，没有 webserver/index-inject 事件表
+   · configForms 服务不存在，写进必需 inject 会让客户端插件永远 pending */
+{
+  const host = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  if (!host.includes('typeof server.tapIndex === "function"')) {
+    failed += 1;
+    console.error("✗ index.js: 缺少 tapIndex 分支（旧版 runtime 上不会注入）");
+  }
+  if (!host.includes("function injectRows(html, rows)")) {
+    failed += 1;
+    console.error("✗ index.js: 缺少 injectRows（tapIndex 分支的渲染实现）");
+  }
+  if (!host.includes('webCtx.on("webserver/index-inject"')) {
+    failed += 1;
+    console.error("✗ index.js: 新版事件表分支丢了");
+  }
+  /* style 必须强制进 head，与新版 renderRow 一致 */
+  if (!/row\.kind === "style"[\s\S]{0,200}placement = "head"/.test(host)) {
+    failed += 1;
+    console.error("✗ index.js: injectRows 没把 style 放进 head");
+  }
+
+  const client = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
+  const decl = /exports\.inject = \[([^\]]*)\]/.exec(client);
+  if (decl && decl[1].includes("configForms")) {
+    failed += 1;
+    console.error("✗ client: configForms 写进了必需 inject（旧 runtime 上整个插件会 pending）");
+  }
+  if (!client.includes('ctx.inject(["configForms"]')) {
+    failed += 1;
+    console.error("✗ client: configForms 没有改成按需注入");
+  }
+}
+
 /* 收工路径必须完整：曾经把 finish() 删掉却留着调用点，
    结果退出回调抛 ReferenceError、遮罩永不消失。 */
 {

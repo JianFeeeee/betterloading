@@ -1691,19 +1691,88 @@ export function apply(ctx, config) {
   const style = buildStyle(cfg);
   const script = buildScript(cfg);
   ctx.inject(["webServer"], (webCtx) => {
+    /* 顺序很重要：主线程脚本要先能读到 worker 源码，否则拿到的
+       __bl_wsrc 是 null，worker 不会启动。 */
+    const rows = [
+      { kind: "style", text: style },
+      { kind: "html", placement: "body",
+        html: `<script type="text/js-worker" id="__bl_wsrc">${WORKER_SRC}</script>` },
+      { kind: "html", placement: "body", html: HTML },
+      { kind: "script", placement: "body", text: script },
+    ];
+
+    /* ---------------------------------------------------------------
+     * 两代注入 API
+     *
+     * 新版（dsh >= 0.2.x）暴露 `webserver/index-inject` 事件，订阅者把
+     * 结构化行 push 进表里，由 WebServer 统一渲染。
+     *
+     * 旧版（dsh 0.1.0-rc.x —— 桌面端 AppImage 内嵌的 runtime 就是它）
+     * 只有 `webServer.tapIndex(html => html)`，一个纯粹的字符串变换。
+     *
+     * 桌面端不是 `dsh-app://`：它 electron 起一个内嵌 `dsh web`，
+     * 然后 `mainWindow.loadURL(serverUrl)` 加载它 —— 所以注入这条路
+     * **本来就走得通**，只是要用旧签名。
+     * ------------------------------------------------------------- */
+    const server = webCtx.webServer || webCtx;
+    if (typeof server.tapIndex === "function") {
+      return server.tapIndex((html) => injectRows(html, rows));
+    }
     return webCtx.on("webserver/index-inject", (table) => {
-      table.push({ kind: "style", text: style });
-      /* 顺序很重要：注入行按 table 顺序插到 <body> 开头，主线程脚本必须先能读到
-         worker 源码，否则拿到的 __bl_wsrc 是 null，worker 不会启动。 */
-      table.push({ kind: "html", placement: "body",
-        html: `<script type="text/js-worker" id="__bl_wsrc">${WORKER_SRC}</script>` });
-      table.push({ kind: "html", placement: "body", html: HTML });
-      table.push({ kind: "script", placement: "body", text: script });
+      for (const row of rows) table.push(row);
     });
   });
 }
 
+/**
+ * 把结构化注入行渲染进一份 index.html（旧版 `tapIndex` 的等价实现）。
+ *
+ * 行为对齐新版的 `renderIndexInjections`：head 行插在 `<head>` 之后，
+ * body 行插在 `<body>` 之后，保持行的相对顺序。
+ *
+ * @param html - 原始 index.html。
+ * @param rows - 与 `webserver/index-inject` 同形的注入行。
+ * @returns 注入后的 index.html。
+ */
+function injectRows(html, rows) {
+  let head = "";
+  let body = "";
+  for (const row of rows) {
+    let markup;
+    let placement = row.placement;
+    if (row.kind === "style") {
+      /* 与新版 renderRow 一致：style 强制进 head，不看 placement。 */
+      markup = `<style>${row.text}</style>`;
+      placement = "head";
+    } else if (row.kind === "script") {
+      markup = `<script>${row.text}</script>`;
+    } else {
+      markup = row.html || "";
+    }
+    if (placement === "head") head += markup;
+    else body += markup;
+  }
+
+  let out = html;
+  if (head) {
+    const open = /<head(?:\s[^>]*)?>/i.exec(out);
+    out = open === null
+      ? head + out
+      : out.slice(0, open.index + open[0].length) + head + out.slice(open.index + open[0].length);
+  }
+  /* 新版会在 body 行之后追加这个尾部脚本，客户端 entry 会 await
+     `__DSH_BOOT_READY__`。旧版没有这个约定，但补上不会有害。 */
+  if (body) {
+    body += "<script>(globalThis.__DSH_BOOT_READY__ ??= Promise.withResolvers()).resolve()<\/script>";
+    const open = /<body(?:\s[^>]*)?>/i.exec(out);
+    out = open === null
+      ? out + body
+      : out.slice(0, open.index + open[0].length) + body + out.slice(open.index + open[0].length);
+  }
+  return out;
+}
+
 /** 内部构造器，仅供自检脚本使用（不参与运行时契约）。 */
-export const internals = { buildStyle, buildScript, WORKER_SRC };
+export const internals = { buildStyle, buildScript, WORKER_SRC, injectRows };
 
 export default { name, inject, Config, apply };

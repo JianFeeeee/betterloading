@@ -178,25 +178,14 @@ Water-level state machine:
 
 ## Known limitations
 
-- **Does not work in dsh Desktop (Electron) out of the box.** The overlay is injected through
-  `webserver/index-inject`, which only affects the index served by
-  `@deepseek-ai/dsh-host-webserver` / `dsh-host-frontend-static`. Desktop is an
-  Electron shell around the same Web app: it *does* run a Web Host (on an
-  OS-assigned port) but the page itself is loaded from `dsh-app://app/` out of
-  the packaged build, and only app HTTP/WebSocket traffic is forwarded to that
-  Host. `renderIndex` is not used there, so injected rows never reach the
-  document. Upstream `docs/subsystems/web-server` states it directly: "the
-  server serves browsers only: Electron loads built files over `file://` and
-  sends fetch requests through an IPC bridge, and does not use this server."
-  A client bundle would not help either: `dsh-client-modules` rejects any
-  `dsh.client.platform` other than `"web"`
-  (`if (decl === void 0 || decl.platform !== "web") return null`).
-- A client bundle would not help either, so making it work there requires patching the
-  desktop build. [`docs/desktop.md`](docs/desktop.md) is an instruction sheet written for a
-  coding agent: how to locate the packaged `index.html`, transplant the injection rows with
-  [`scripts/patch-desktop-index.mjs`](scripts/patch-desktop-index.mjs), or make Electron call
-  `renderIndex` so the settings page keeps working — plus the conditions under which it should
-  stop and report it as impossible.
+- **Works on dsh Desktop too** (verified against the AppImage + its pinned
+  runtime 0.1.0-rc.6). The desktop app is an Electron shell that starts an
+  embedded `dsh web` and `loadURL`s it, so `webserver/index-inject` reaches the
+  document. Two API gaps are handled inside the plugin: the older runtime only
+  has `webServer.tapIndex(html => html)` (no inject event table), and it has no
+  `configForms` client service — see [`docs/desktop.md`](docs/desktop.md).
+  What desktop does *not* get is the Settings page, because that needs the
+  0.2.x client slot machinery.
 - Affects the dsh **web UI** only; server behaviour is unchanged.
 - Depends on dsh's `webserver/index-inject` event and the `#root` structure. A major dsh change may require follow-up.
 - dsh's own boot screen is hidden via a **structural selector** (class contains `_boot_`) because its class names carry build hashes. The failure card is deliberately left visible.
